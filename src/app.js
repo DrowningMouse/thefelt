@@ -333,14 +333,24 @@ function renderDashboard() {
       html += '<div class="empty-state" style="padding:0.5rem 0">Everyone broke even!</div>';
     } else {
       s.forEach(t => {
-        const from = allData.users[t.from]?.username || "?";
-        const to = allData.users[t.to]?.username || "?";
+        const fromUser = allData.users[t.from];
+        const toUser = allData.users[t.to];
+        const fromName = fromUser?.username || "?";
+        const toName = toUser?.username || "?";
+        const fromReal = fromUser?.realname || "";
+        const toReal = toUser?.realname || "";
         html += `<div class="settle-row">
-          <div class="avatar" style="width:24px;height:24px;font-size:9px">${initials(from)}</div>
-          <span style="font-size:13px;font-weight:500">${from}</span>
+          <div class="avatar" style="width:24px;height:24px;font-size:9px">${initials(fromName)}</div>
+          <div>
+            <div style="font-size:13px;font-weight:500">${fromName}</div>
+            ${fromReal ? `<div style="font-size:10px;color:var(--text-dim)">${fromReal}</div>` : ""}
+          </div>
           <span class="arrow">→</span>
-          <div class="avatar" style="width:24px;height:24px;font-size:9px;background:rgba(110,207,138,0.15);border-color:rgba(110,207,138,0.3)">${initials(to)}</div>
-          <span style="font-size:13px;font-weight:500">${to}</span>
+          <div class="avatar" style="width:24px;height:24px;font-size:9px;background:rgba(110,207,138,0.15);border-color:rgba(110,207,138,0.3)">${initials(toName)}</div>
+          <div>
+            <div style="font-size:13px;font-weight:500">${toName}</div>
+            ${toReal ? `<div style="font-size:10px;color:var(--text-dim)">${toReal}</div>` : ""}
+          </div>
           <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
         </div>`;
       });
@@ -685,10 +695,24 @@ function showGameDetail(gid) {
     html += '<div class="empty-state" style="padding:0.5rem 0">Everyone broke even!</div>';
   } else {
     s.forEach(t => {
+      const fromUser = allData.users[t.from];
+      const toUser = allData.users[t.to];
+      const fromName = fromUser?.username || "?";
+      const toName = toUser?.username || "?";
+      const fromReal = fromUser?.realname || "";
+      const toReal = toUser?.realname || "";
       html += `<div class="settle-row">
-        <span style="font-weight:500">${allData.users[t.from]?.username || "?"}</span>
+        <div class="avatar" style="width:24px;height:24px;font-size:9px">${initials(fromName)}</div>
+        <div>
+          <div style="font-size:13px;font-weight:500">${fromName}</div>
+          ${fromReal ? `<div style="font-size:10px;color:var(--text-dim)">${fromReal}</div>` : ""}
+        </div>
         <span class="arrow">→</span>
-        <span style="font-weight:500">${allData.users[t.to]?.username || "?"}</span>
+        <div class="avatar" style="width:24px;height:24px;font-size:9px;background:rgba(110,207,138,0.15);border-color:rgba(110,207,138,0.3)">${initials(toName)}</div>
+        <div>
+          <div style="font-size:13px;font-weight:500">${toName}</div>
+          ${toReal ? `<div style="font-size:10px;color:var(--text-dim)">${toReal}</div>` : ""}
+        </div>
         <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
       </div>`;
     });
@@ -1073,10 +1097,24 @@ function renderLiveTracker(el) {
     if (txns.length) {
       html += `<div class="section-title" style="margin-top:0.5rem;font-size:16px">Settlement Preview</div><div class="g-card" style="margin-bottom:1rem">`;
       txns.forEach(t => {
+        const fromUser = allData.users[t.from];
+        const toUser = allData.users[t.to];
+        const fromName = players[t.from]?.username || fromUser?.username || "?";
+        const toName = players[t.to]?.username || toUser?.username || "?";
+        const fromReal = fromUser?.realname || "";
+        const toReal = toUser?.realname || "";
         html += `<div class="settle-row">
-          <span style="font-weight:500">${players[t.from]?.username || "?"}</span>
+          <div class="avatar" style="width:24px;height:24px;font-size:9px">${initials(fromName)}</div>
+          <div>
+            <div style="font-size:13px;font-weight:500">${fromName}</div>
+            ${fromReal ? `<div style="font-size:10px;color:var(--text-dim)">${fromReal}</div>` : ""}
+          </div>
           <span class="arrow">→</span>
-          <span style="font-weight:500">${players[t.to]?.username || "?"}</span>
+          <div class="avatar" style="width:24px;height:24px;font-size:9px;background:rgba(110,207,138,0.15);border-color:rgba(110,207,138,0.3)">${initials(toName)}</div>
+          <div>
+            <div style="font-size:13px;font-weight:500">${toName}</div>
+            ${toReal ? `<div style="font-size:10px;color:var(--text-dim)">${toReal}</div>` : ""}
+          </div>
           <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
         </div>`;
       });
