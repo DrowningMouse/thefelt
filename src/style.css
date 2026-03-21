@@ -314,3 +314,18 @@ input[type=number] { -moz-appearance:textfield; appearance:textfield; }
 .toast.show { opacity:1; }
 
 .loading-msg { text-align:center;padding:1.5rem;color:var(--text-dim);font-size:13px; }
+
+/* ── LIVE GAME ── */
+.pot-summary {
+  background:rgba(0,0,0,0.2);border:1px solid rgba(201,168,76,0.1);
+  border-radius:8px;padding:0.75rem 1rem;margin-bottom:1rem;
+  display:flex;justify-content:space-between;font-size:13px;
+}
+.live-badge {
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;color:var(--success);
+}
+#live-dot {
+  width:7px;height:7px;border-radius:50%;background:var(--success);
+  animation:pulse 1.5s infinite;display:inline-block;margin-left:3px;vertical-align:middle;
+}

@@ -9,21 +9,39 @@ const ADMIN_EMAIL = "dylan.r.minto@gmail.com"; // ← your admin email
 function isAdmin() {
   return currentUser && currentUser.email === ADMIN_EMAIL;
 }
-const DB_URL = "https://api.jsonbin.io/v3/b";  // replaced by localStorage for self-hosted
 
 // ── STATE ──────────────────────────────────────
 let currentUser = null;
 let allData = { users: {}, games: [] };
 
-// Active game being built
+// Active game being built (local, non-live)
 let activeGame = {
   date: new Date().toISOString().split("T")[0],
   name: "",
-  entries: [], // { userId, buyIn, cashOut, cashedOut: bool }
+  entries: [],
 };
 
 // Cash-out modal target
 let cashoutTargetIdx = null;
+
+// Live game state
+let liveGame = null;          // current snapshot from Firebase
+let liveUnsubscribe = null;   // Firebase listener cleanup fn
+let rebuyTargetId = null;     // userId for re-buy modal
+let liveCashoutTargetId = null; // userId for live cashout modal
+
+// Firebase API — imported async so app.js loads first
+let FB = {};
+(async () => {
+  try {
+    const mod = await import("./firebase.js");
+    FB = mod;
+    // Start watching for a live game as soon as Firebase loads
+    liveUnsubscribe = FB.fbWatchLiveGame(onLiveGameUpdate);
+  } catch (e) {
+    console.warn("Firebase not available:", e);
+  }
+})();
 
 // ── PERSISTENCE (localStorage — works on any static host) ──
 function loadData() {
@@ -137,6 +155,63 @@ function doSignup() {
   enterApp();
 }
 
+// ── RESET PASSWORD ─────────────────────────────
+let resetTargetUser = null; // user found in step 1
+
+function showResetForm(show = true) {
+  document.getElementById("login-form").style.display = show ? "none" : "block";
+  document.getElementById("reset-form").style.display = show ? "block" : "none";
+  document.getElementById("signup-form").style.display = "none";
+  // Reset state
+  document.getElementById("reset-email").value = "";
+  document.getElementById("reset-newpass") && (document.getElementById("reset-newpass").value = "");
+  document.getElementById("reset-confirmpass") && (document.getElementById("reset-confirmpass").value = "");
+  document.getElementById("reset-step2").style.display = "none";
+  document.getElementById("reset-err").style.display = "none";
+  document.getElementById("reset-btn").textContent = "Continue";
+  document.getElementById("reset-btn").onclick = doResetStep;
+  document.getElementById("auth-hint").textContent = show ? "Enter your registered email to reset your password" : "Sign in with your email and password";
+  resetTargetUser = null;
+}
+
+function doResetStep() {
+  const err = document.getElementById("reset-err");
+  err.style.display = "none";
+
+  // Step 1 — verify email exists
+  if (!resetTargetUser) {
+    const email = document.getElementById("reset-email").value.trim().toLowerCase();
+    if (!email) { err.textContent = "Enter your email address."; err.style.display = "block"; return; }
+    loadData();
+    const user = Object.values(allData.users).find(u => u.email === email);
+    if (!user) { err.textContent = "No account found with that email."; err.style.display = "block"; return; }
+    resetTargetUser = user;
+    document.getElementById("reset-step2").style.display = "block";
+    document.getElementById("reset-email").disabled = true;
+    document.getElementById("reset-btn").textContent = "Set New Password";
+    document.getElementById("reset-btn").onclick = doResetPassword;
+    setTimeout(() => document.getElementById("reset-newpass").focus(), 80);
+    return;
+  }
+  doResetPassword();
+}
+
+function doResetPassword() {
+  const err = document.getElementById("reset-err");
+  err.style.display = "none";
+  const newPass = document.getElementById("reset-newpass").value;
+  const confirm = document.getElementById("reset-confirmpass").value;
+  if (!newPass || newPass.length < 6) { err.textContent = "Password must be at least 6 characters."; err.style.display = "block"; return; }
+  if (newPass !== confirm) { err.textContent = "Passwords don't match."; err.style.display = "block"; return; }
+  loadData();
+  if (!allData.users[resetTargetUser.id]) { err.textContent = "Account not found."; err.style.display = "block"; return; }
+  allData.users[resetTargetUser.id].password = btoa(newPass);
+  saveData();
+  showToast("Password updated — please sign in");
+  showResetForm(false);
+  resetTargetUser = null;
+}
+
 function logout() {
   currentUser = null;
   sessionStorage.removeItem("thefelt_user");
@@ -150,7 +225,6 @@ function enterApp() {
   document.getElementById("topbar-username").textContent = currentUser.username;
   document.getElementById("topbar-avatar").textContent = initials(currentUser.username);
   activeGame = { date: new Date().toISOString().split("T")[0], name: "", entries: [] };
-  // Show admin tab only for admin
   document.getElementById("admin-tab").style.display = isAdmin() ? "block" : "none";
   switchTab("dashboard", document.querySelector(".nav-item"));
 }
@@ -159,10 +233,11 @@ function enterApp() {
 function switchTab(tab, el) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   if (el) el.classList.add("active");
-  ["dashboard", "game", "history", "profile", "stats", "admin"].forEach(t => {
+  ["dashboard", "live", "game", "history", "profile", "stats", "admin"].forEach(t => {
     document.getElementById("tab-" + t).style.display = t === tab ? "block" : "none";
   });
   if (tab === "dashboard") renderDashboard();
+  if (tab === "live") renderLiveTab();
   if (tab === "game") renderGame();
   if (tab === "history") renderHistory();
   if (tab === "profile") renderProfile();
@@ -711,50 +786,35 @@ function renderAdmin() {
   const el = document.getElementById("tab-admin");
   loadData();
   const users = Object.values(allData.users);
-  const quotes = allData.quotes || POKER_QUOTES.map(q => ({ ...q }));
+  const games = allData.games || [];
 
   let html = `<div class="section-title">Admin Panel</div>`;
 
   // ── Players ──
-  html += `<div class="section-title" style="font-size:16px;margin-bottom:0.75rem">Players</div>
+  html += `<div class="section-title" style="font-size:16px;margin-bottom:0.75rem">Players (${users.length})</div>
     <div class="g-card" style="margin-bottom:1.25rem">`;
   if (!users.length) {
     html += '<div class="empty-state">No players registered.</div>';
   } else {
+    const games = allData.games || [];
     users.forEach(u => {
       const isSelf = u.id === currentUser.id;
+      let net = 0, gs = 0;
+      games.forEach(g => {
+        const e = g.entries.find(x => x.userId === u.id);
+        if (e) { net += e.cashOut - e.buyIn; gs++; }
+      });
+      const netCls = net > 0 ? "color:#6ecf8a" : net < 0 ? "color:#e07070" : "color:var(--text-dim)";
       html += `<div class="ldb-row">
         <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(u.username)}</div>
         <div style="flex:1">
-          <div style="font-size:13px;color:#f5f0e8">${u.username}</div>
-          <div style="font-size:11px;color:var(--text-dim)">${u.email}</div>
+          <div style="font-size:13px;color:#f5f0e8">${u.username}${isSelf ? " <span style='font-size:10px;color:var(--text-dim)'>(you)</span>" : ""}</div>
+          <div style="font-size:11px;color:var(--text-dim)">${u.email} · ${gs} game${gs !== 1 ? "s" : ""} · <span style="${netCls}">${fmtNet(net)}</span></div>
         </div>
-        ${isSelf ? `<span style="font-size:11px;color:var(--text-dim);padding:0 8px">you</span>` : `<button class="btn-sm danger" style="padding:4px 10px;font-size:12px" onclick="removePlayer('${u.id}')">Remove</button>`}
+        ${isSelf ? "" : `<button class="btn-sm danger" style="padding:4px 10px;font-size:12px" onclick="removePlayer('${u.id}')">Remove</button>`}
       </div>`;
     });
   }
-  html += `</div>`;
-
-  // ── Quotes ──
-  html += `<div class="section-title" style="font-size:16px;margin-bottom:0.75rem">Quotes</div>
-    <div class="g-card" style="margin-bottom:0.75rem">
-      <span class="g-label">Add a new quote</span>
-      <input class="g-input" type="text" id="new-quote-text" placeholder='e.g. "The cards are the same for everyone."' maxlength="200">
-      <span class="g-label">Attribution</span>
-      <input class="g-input" type="text" id="new-quote-attr" placeholder="Author name or Anonymous" maxlength="60">
-      <button class="btn-sm" onclick="addQuote()" style="margin-top:0.25rem">+ Add quote</button>
-    </div>
-    <div class="g-card">`;
-
-  quotes.forEach((q, i) => {
-    html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid rgba(201,168,76,0.08)">
-      <div style="flex:1">
-        <div style="font-size:13px;font-style:italic;color:#f5f0e8;line-height:1.4">"${q.text}"</div>
-        <div style="font-size:11px;color:var(--gold);margin-top:4px;opacity:0.75">— ${q.attr}</div>
-      </div>
-      <button class="icon-btn rm" onclick="deleteQuote(${i})" title="Delete" style="flex-shrink:0;margin-top:2px">✕</button>
-    </div>`;
-  });
   html += `</div>`;
 
   el.innerHTML = html;
@@ -762,12 +822,15 @@ function renderAdmin() {
 
 function removePlayer(uid) {
   if (!isAdmin()) return;
-  const u = allData.users[uid];
-  if (!confirm(`Remove ${u?.username} from the club? This cannot be undone.`)) return;
   loadData();
+  const u = allData.users[uid];
+  if (!u) return;
+  const gamesPlayed = (allData.games || []).filter(g => g.entries.find(e => e.userId === uid)).length;
+  const msg = `Remove ${u.username} (${u.email}) from the club?\n\nThey have played in ${gamesPlayed} game${gamesPlayed !== 1 ? "s" : ""}. Their game history will be preserved in records but their account will be deleted.\n\nThis cannot be undone.`;
+  if (!confirm(msg)) return;
   delete allData.users[uid];
   saveData();
-  showToast(`${u?.username} removed`);
+  showToast(`${u.username} removed`);
   renderAdmin();
 }
 
@@ -793,6 +856,390 @@ function deleteQuote(idx) {
   saveData();
   showToast("Quote deleted");
   renderAdmin();
+}
+
+// ── LIVE GAME ───────────────────────────────────
+
+// Called every time Firebase pushes an update
+function onLiveGameUpdate(game) {
+  liveGame = game;
+  updateLiveDot();
+  // If live tab is currently visible, re-render it
+  const liveEl = document.getElementById("tab-live");
+  if (liveEl && liveEl.style.display !== "none") renderLiveTab();
+}
+
+function updateLiveDot() {
+  const dot = document.getElementById("live-dot");
+  if (!dot) return;
+  if (liveGame) {
+    dot.style.display = "inline-block";
+  } else {
+    dot.style.display = "none";
+  }
+}
+
+function renderLiveTab() {
+  const el = document.getElementById("tab-live");
+  if (!currentUser) return;
+
+  if (!liveGame) {
+    // No active game — show start form
+    renderLiveStartForm(el);
+    return;
+  }
+
+  // Active game exists — show the live tracker
+  renderLiveTracker(el);
+}
+
+function renderLiveStartForm(el) {
+  loadData();
+  const users = Object.values(allData.users);
+  let html = `
+    <div class="section-title">Start Live Game</div>
+    <div class="g-card">
+      <span class="g-label">Game Name <span style="font-size:10px;color:var(--text-dim)">(optional)</span></span>
+      <input class="g-input" type="text" id="lg-name" placeholder='e.g. "Saturday Night Game"' maxlength="40">
+      <span class="g-label">Date</span>
+      <input class="g-input" type="date" id="lg-date" value="${new Date().toISOString().split("T")[0]}">
+      <span class="g-label">Starting buy-in per player ($)</span>
+      <input class="g-input" type="number" min="0" id="lg-buyin" placeholder="e.g. 100">
+      <span class="g-label">Select players</span>
+      <div id="lg-player-select" style="margin-bottom:0.75rem">
+        ${users.map(u => `
+          <label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08);cursor:pointer">
+            <input type="checkbox" value="${u.id}" id="lgp-${u.id}" style="width:16px;height:16px;accent-color:var(--gold)">
+            <div class="avatar" style="width:26px;height:26px;font-size:10px">${initials(u.username)}</div>
+            <span style="font-size:14px">${u.username}</span>
+          </label>
+        `).join("")}
+      </div>
+      <button class="btn-sm primary" style="width:100%;padding:10px" onclick="startLiveGame()">Start Live Game ↗</button>
+    </div>`;
+  el.innerHTML = html;
+}
+
+async function startLiveGame() {
+  loadData();
+  const name = document.getElementById("lg-name").value.trim();
+  const date = document.getElementById("lg-date").value;
+  const buyInAmt = parseFloat(document.getElementById("lg-buyin").value) || 0;
+  const checked = [...document.querySelectorAll("#lg-player-select input:checked")].map(i => i.value);
+
+  if (!checked.length) { showToast("Select at least one player"); return; }
+
+  const players = {};
+  checked.forEach(uid => {
+    players[uid] = {
+      userId: uid,
+      username: allData.users[uid]?.username || "?",
+      totalBuyIn: buyInAmt,
+      buyIns: buyInAmt > 0 ? [{ amount: buyInAmt, at: Date.now() }] : [],
+      cashOut: 0,
+      cashedOut: false
+    };
+  });
+
+  const gameData = {
+    id: "live_" + Date.now(),
+    name: name || "",
+    date,
+    startedBy: currentUser.id,
+    startedAt: Date.now(),
+    players,
+    active: true
+  };
+
+  try {
+    await FB.fbStartLiveGame(gameData);
+    showToast("Live game started!");
+    // Switch to live tab
+    const navItems = document.querySelectorAll(".nav-item");
+    navItems.forEach(n => n.classList.remove("active"));
+    document.querySelector('[data-tab="live"]').classList.add("active");
+  } catch (e) {
+    showToast("Error starting game — check connection");
+  }
+}
+
+function renderLiveTracker(el) {
+  loadData();
+  const g = liveGame;
+  const players = g.players || {};
+  const isStarter = g.startedBy === currentUser.id;
+  const totalPot = Object.values(players).reduce((s, p) => s + (p.totalBuyIn || 0), 0);
+  const cashedOut = Object.values(players).filter(p => p.cashedOut).reduce((s, p) => s + (p.cashOut || 0), 0);
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:0.75rem">
+      <div class="live-badge"><div class="live-dot"></div> Live Game</div>
+      ${g.name ? `<span style="font-family:'Playfair Display',serif;font-size:16px;color:var(--gold)">${g.name}</span>` : ""}
+    </div>
+    <div class="pot-summary" style="margin-bottom:1rem">
+      <span style="color:var(--text-muted)">Total pot: <strong style="color:#f5f0e8">$${totalPot.toFixed(2)}</strong></span>
+      <span style="color:var(--text-muted)">Cashed out: <strong style="color:#6ecf8a">$${cashedOut.toFixed(2)}</strong></span>
+    </div>
+    <div class="g-card" style="margin-bottom:1rem">
+      <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-bottom:6px;align-items:end">
+        <span class="ge-label">Player</span>
+        <span class="ge-label" style="text-align:center">Total buy-in</span>
+        <span class="ge-label"></span>
+      </div>`;
+
+  Object.values(players).forEach(p => {
+    const uname = p.username || allData.users[p.userId]?.username || "?";
+    const ini = initials(uname);
+    const buyIns = p.buyIns || [];
+
+    if (p.cashedOut) {
+      html += `
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08);opacity:0.6">
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="avatar" style="width:24px;height:24px;font-size:9px;opacity:0.5">${ini}</div>
+            <span style="font-size:13px">${uname}</span>
+            <span class="status-pill out">out</span>
+          </div>
+          <span style="font-size:13px;color:#6ecf8a;text-align:center">$${(p.totalBuyIn||0).toFixed(0)}</span>
+          <div style="display:flex;gap:4px">
+            ${isStarter ? `<button class="icon-btn undo" onclick="liveUndoCashout('${p.userId}')" title="Undo">↺</button>` : ""}
+          </div>
+        </div>`;
+    } else {
+      html += `
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08)">
+          <div style="display:flex;align-items:center;gap:6px;overflow:hidden">
+            <div class="avatar" style="width:24px;height:24px;font-size:9px">${ini}</div>
+            <div style="overflow:hidden">
+              <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${uname}</div>
+              ${buyIns.length > 1 ? `<div style="font-size:10px;color:var(--text-dim)">${buyIns.length} buy-ins</div>` : ""}
+            </div>
+            <span class="status-pill">in</span>
+          </div>
+          <span style="font-size:14px;font-weight:500;color:#f5f0e8;text-align:center;white-space:nowrap">$${(p.totalBuyIn||0).toFixed(0)}</span>
+          <div style="display:flex;gap:4px">
+            <button class="icon-btn" style="border-color:rgba(201,168,76,0.5);color:var(--gold);font-size:11px;width:auto;padding:0 8px" onclick="openRebuy('${p.userId}','${uname}')">+ Buy-in</button>
+            ${isStarter ? `<button class="icon-btn confirm" onclick="openLiveCashout('${p.userId}','${uname}')" title="Cash out">✓</button>` : ""}
+          </div>
+        </div>`;
+    }
+  });
+
+  html += `</div>`;
+
+  // Add player mid-game
+  html += `<button class="btn-sm" style="margin-bottom:0.75rem" onclick="openLiveAddPlayer()">+ Add player</button>`;
+
+  // Settlement preview
+  const cashedPlayers = Object.values(players).filter(p => p.cashedOut);
+  if (cashedPlayers.length >= 2) {
+    const entries = Object.values(players).map(p => ({
+      userId: p.userId,
+      buyIn: p.totalBuyIn || 0,
+      cashOut: p.cashOut || 0
+    }));
+    const txns = calcSettlement(entries.filter(e => {
+      const pl = players[e.userId];
+      return pl && pl.cashedOut;
+    }));
+    if (txns.length) {
+      html += `<div class="section-title" style="margin-top:0.5rem;font-size:16px">Settlement Preview</div><div class="g-card" style="margin-bottom:1rem">`;
+      txns.forEach(t => {
+        html += `<div class="settle-row">
+          <span style="font-weight:500">${players[t.from]?.username || "?"}</span>
+          <span class="arrow">→</span>
+          <span style="font-weight:500">${players[t.to]?.username || "?"}</span>
+          <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+  }
+
+  // End game — only for starter
+  if (isStarter) {
+    const allOut = Object.values(players).every(p => p.cashedOut);
+    html += `
+      <div style="display:flex;gap:8px;margin-top:0.5rem">
+        <button class="btn-sm primary" style="flex:1" onclick="endLiveGame()" ${!allOut ? 'title="Cash out all players first"' : ""}>
+          End &amp; Save ↗
+        </button>
+        <button class="btn-sm danger" onclick="cancelLiveGame()">Cancel Game</button>
+      </div>
+      ${!allOut ? `<div style="font-size:11px;color:var(--text-dim);margin-top:6px;text-align:center">${Object.values(players).filter(p=>!p.cashedOut).length} player${Object.values(players).filter(p=>!p.cashedOut).length!==1?"s":""} still at the table</div>` : ""}`;
+  } else {
+    html += `<div style="font-size:12px;color:var(--text-dim);text-align:center;margin-top:0.5rem">Game started by ${allData.users[g.startedBy]?.username || "host"} · only they can end it</div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+// ── RE-BUY MODAL ───────────────────────────────
+function openRebuy(userId, username) {
+  rebuyTargetId = userId;
+  document.getElementById("rebuy-title").textContent = `Add Buy-in — ${username}`;
+  const current = liveGame?.players?.[userId]?.totalBuyIn || 0;
+  document.getElementById("rebuy-sub").textContent = `Current total: $${current.toFixed(0)}`;
+  document.getElementById("rebuy-amount").value = "";
+  document.getElementById("rebuy-err").style.display = "none";
+  document.getElementById("rebuy-modal").classList.add("open");
+  setTimeout(() => document.getElementById("rebuy-amount").focus(), 80);
+}
+
+function closeRebuyModal() {
+  document.getElementById("rebuy-modal").classList.remove("open");
+  rebuyTargetId = null;
+}
+
+async function confirmRebuy() {
+  const amt = parseFloat(document.getElementById("rebuy-amount").value);
+  const err = document.getElementById("rebuy-err");
+  err.style.display = "none";
+  if (isNaN(amt) || amt <= 0) { err.textContent = "Enter a valid amount."; err.style.display = "block"; return; }
+
+  const current = liveGame?.players?.[rebuyTargetId]?.totalBuyIn || 0;
+  const newTotal = current + amt;
+
+  try {
+    // Update total and append to buy-in history
+    const buyIns = [...(liveGame?.players?.[rebuyTargetId]?.buyIns || []), { amount: amt, at: Date.now() }];
+    await FB.fbAddBuyIn(rebuyTargetId, newTotal);
+    // Also update buyIns array
+    const { getDatabase, ref, update } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+    const db = getDatabase();
+    await update(ref(db, `liveGame/players/${rebuyTargetId}`), { totalBuyIn: newTotal, buyIns });
+    showToast(`+$${amt} buy-in added`);
+    closeRebuyModal();
+  } catch (e) {
+    showToast("Error — check connection");
+  }
+}
+
+// ── LIVE CASH-OUT ──────────────────────────────
+function openLiveCashout(userId, username) {
+  liveCashoutTargetId = userId;
+  document.getElementById("live-cashout-title").textContent = `Cash Out — ${username}`;
+  const buyIn = liveGame?.players?.[userId]?.totalBuyIn || 0;
+  document.getElementById("live-cashout-sub").textContent = `Total buy-in: $${buyIn.toFixed(0)}`;
+  document.getElementById("live-cashout-amount").value = "";
+  document.getElementById("live-cashout-err").style.display = "none";
+  document.getElementById("live-cashout-modal").classList.add("open");
+  setTimeout(() => document.getElementById("live-cashout-amount").focus(), 80);
+}
+
+function closeLiveCashout() {
+  document.getElementById("live-cashout-modal").classList.remove("open");
+  liveCashoutTargetId = null;
+}
+
+async function confirmLiveCashout() {
+  const amt = parseFloat(document.getElementById("live-cashout-amount").value);
+  const err = document.getElementById("live-cashout-err");
+  err.style.display = "none";
+  if (isNaN(amt) || amt < 0) { err.textContent = "Enter a valid amount."; err.style.display = "block"; return; }
+  try {
+    await FB.fbCashOutPlayer(liveCashoutTargetId, amt);
+    showToast("Cashed out ✓");
+    closeLiveCashout();
+  } catch (e) {
+    showToast("Error — check connection");
+  }
+}
+
+async function liveUndoCashout(userId) {
+  try {
+    await FB.fbUndoCashOut(userId);
+    showToast("Cash-out undone");
+  } catch (e) {
+    showToast("Error — check connection");
+  }
+}
+
+// ── ADD PLAYER MID-GAME ────────────────────────
+function openLiveAddPlayer() {
+  loadData();
+  const inGame = Object.keys(liveGame?.players || {});
+  const avail = Object.values(allData.users).filter(u => !inGame.includes(u.id));
+  const el = document.getElementById("player-modal-list");
+  if (!avail.length) {
+    el.innerHTML = '<div class="empty-state">All players are already in this game.</div>';
+  } else {
+    el.innerHTML = avail.map(u => `
+      <div class="player-pick-row" onclick="addPlayerToLiveGame('${u.id}')">
+        <div class="avatar">${initials(u.username)}</div>
+        <div>
+          <div style="font-size:14px">${u.username}</div>
+          <div style="font-size:11px;color:var(--text-dim)">${u.email}</div>
+        </div>
+      </div>
+    `).join("");
+  }
+  document.getElementById("player-modal").classList.add("open");
+}
+
+async function addPlayerToLiveGame(userId) {
+  loadData();
+  const u = allData.users[userId];
+  closePlayerModal();
+  try {
+    await FB.fbAddPlayerToLiveGame(userId, {
+      userId,
+      username: u.username,
+      totalBuyIn: 0,
+      buyIns: [],
+      cashOut: 0,
+      cashedOut: false
+    });
+    showToast(`${u.username} added to game`);
+  } catch (e) {
+    showToast("Error — check connection");
+  }
+}
+
+// ── END / CANCEL LIVE GAME ─────────────────────
+async function endLiveGame() {
+  if (!liveGame) return;
+  const players = liveGame.players || {};
+  const notOut = Object.values(players).filter(p => !p.cashedOut).map(p => p.username);
+  if (notOut.length) { showToast(`Still at table: ${notOut.join(", ")}`); return; }
+
+  const entries = Object.values(players).map(p => ({
+    userId: p.userId,
+    buyIn: p.totalBuyIn || 0,
+    cashOut: p.cashOut || 0
+  }));
+
+  const totalIn = entries.reduce((s, e) => s + e.buyIn, 0);
+  const totalOut = entries.reduce((s, e) => s + e.cashOut, 0);
+  if (Math.abs(totalIn - totalOut) > 1) {
+    showToast(`Buy-ins ($${totalIn.toFixed(2)}) ≠ cash-outs ($${totalOut.toFixed(2)})`);
+    return;
+  }
+
+  loadData();
+  if (!allData.games) allData.games = [];
+  allData.games.push({
+    id: liveGame.id,
+    date: liveGame.date,
+    name: liveGame.name || "",
+    entries,
+    settlement: calcSettlement(entries)
+  });
+  saveData();
+
+  await FB.fbEndLiveGame();
+  showToast("Game saved!");
+  const nav = document.querySelectorAll(".nav-item");
+  nav.forEach(n => n.classList.remove("active"));
+  nav[0].classList.add("active");
+  switchTab("dashboard", nav[0]);
+}
+
+async function cancelLiveGame() {
+  if (!confirm("Cancel this live game? All buy-in data will be lost.")) return;
+  await FB.fbEndLiveGame();
+  showToast("Game cancelled");
+  renderLiveTab();
 }
 
 // ── INIT ───────────────────────────────────────
