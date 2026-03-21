@@ -1,0 +1,813 @@
+// ═══════════════════════════════════════════════
+//  THE FELT — Poker Tracker
+//  app.js
+// ═══════════════════════════════════════════════
+
+const SITE_PASSWORD = "allin"; // Change this to your own secret
+const ADMIN_EMAIL = "dylan.r.minto@gmail.com"; // ← your admin email
+
+function isAdmin() {
+  return currentUser && currentUser.email === ADMIN_EMAIL;
+}
+const DB_URL = "https://api.jsonbin.io/v3/b";  // replaced by localStorage for self-hosted
+
+// ── STATE ──────────────────────────────────────
+let currentUser = null;
+let allData = { users: {}, games: [] };
+
+// Active game being built
+let activeGame = {
+  date: new Date().toISOString().split("T")[0],
+  name: "",
+  entries: [], // { userId, buyIn, cashOut, cashedOut: bool }
+};
+
+// Cash-out modal target
+let cashoutTargetIdx = null;
+
+// ── PERSISTENCE (localStorage — works on any static host) ──
+function loadData() {
+  try {
+    const raw = localStorage.getItem("thefelt_data");
+    if (raw) allData = JSON.parse(raw);
+    else allData = { users: {}, games: [] };
+  } catch (e) {
+    allData = { users: {}, games: [] };
+  }
+}
+
+function saveData() {
+  try {
+    localStorage.setItem("thefelt_data", JSON.stringify(allData));
+  } catch (e) {
+    showToast("Storage error — data may not be saved");
+  }
+}
+
+// ── UTILS ──────────────────────────────────────
+function initials(name) {
+  return name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+}
+
+function fmtNet(v) {
+  if (Math.abs(v) < 0.005) return "$0.00";
+  return (v > 0 ? "+$" : "-$") + Math.abs(v).toFixed(2);
+}
+
+function showToast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 2400);
+}
+
+function setLoading(btnId, loading, label) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.textContent = loading ? "..." : label;
+}
+
+// ── AUTH ───────────────────────────────────────
+function switchAuthTab(tab) {
+  document.getElementById("login-form").style.display = tab === "login" ? "block" : "none";
+  document.getElementById("signup-form").style.display = tab === "signup" ? "block" : "none";
+  document.querySelectorAll(".tab-btn").forEach((b, i) =>
+    b.classList.toggle("active", (i === 0 && tab === "login") || (i === 1 && tab === "signup"))
+  );
+  document.getElementById("auth-hint").textContent =
+    tab === "login" ? "Sign in with your email and password" : "Get the club password from your host";
+}
+
+function doLogin() {
+  const email = document.getElementById("login-email").value.trim().toLowerCase();
+  const pass = document.getElementById("login-pass").value;
+  const err = document.getElementById("login-err");
+  err.style.display = "none";
+  loadData();
+  const user = Object.values(allData.users).find(u => u.email === email);
+  if (!user || user.password !== btoa(pass)) {
+    err.textContent = "Invalid email or password.";
+    err.style.display = "block";
+    return;
+  }
+  currentUser = user;
+  sessionStorage.setItem("thefelt_user", user.id);
+  enterApp();
+}
+
+function doSignup() {
+  const sitePass = document.getElementById("signup-site-pass").value;
+  const email = document.getElementById("signup-email").value.trim().toLowerCase();
+  const username = document.getElementById("signup-username").value.trim();
+  const pass = document.getElementById("signup-pass").value;
+  const err = document.getElementById("signup-err");
+  err.style.display = "none";
+
+  if (sitePass !== SITE_PASSWORD) {
+    err.textContent = "Wrong club password. Ask your host.";
+    err.style.display = "block"; return;
+  }
+  if (!email || !username || !pass) {
+    err.textContent = "All fields are required.";
+    err.style.display = "block"; return;
+  }
+  if (pass.length < 6) {
+    err.textContent = "Password must be at least 6 characters.";
+    err.style.display = "block"; return;
+  }
+
+  loadData();
+
+  if (Object.values(allData.users).find(u => u.email === email)) {
+    err.textContent = "Email already registered.";
+    err.style.display = "block"; return;
+  }
+  if (Object.values(allData.users).find(u => u.username.toLowerCase() === username.toLowerCase())) {
+    err.textContent = "That table name is taken.";
+    err.style.display = "block"; return;
+  }
+
+  const id = "u_" + Date.now();
+  const user = { id, email, username, password: btoa(pass) };
+  allData.users[id] = user;
+  saveData();
+  currentUser = user;
+  sessionStorage.setItem("thefelt_user", id);
+  enterApp();
+}
+
+function logout() {
+  currentUser = null;
+  sessionStorage.removeItem("thefelt_user");
+  document.getElementById("landing").classList.add("active");
+  document.getElementById("app").classList.remove("active");
+}
+
+function enterApp() {
+  document.getElementById("landing").classList.remove("active");
+  document.getElementById("app").classList.add("active");
+  document.getElementById("topbar-username").textContent = currentUser.username;
+  document.getElementById("topbar-avatar").textContent = initials(currentUser.username);
+  activeGame = { date: new Date().toISOString().split("T")[0], name: "", entries: [] };
+  // Show admin tab only for admin
+  document.getElementById("admin-tab").style.display = isAdmin() ? "block" : "none";
+  switchTab("dashboard", document.querySelector(".nav-item"));
+}
+
+// ── TABS ───────────────────────────────────────
+function switchTab(tab, el) {
+  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+  if (el) el.classList.add("active");
+  ["dashboard", "game", "history", "profile", "stats", "admin"].forEach(t => {
+    document.getElementById("tab-" + t).style.display = t === tab ? "block" : "none";
+  });
+  if (tab === "dashboard") renderDashboard();
+  if (tab === "game") renderGame();
+  if (tab === "history") renderHistory();
+  if (tab === "profile") renderProfile();
+  if (tab === "stats") renderStats();
+  if (tab === "admin") renderAdmin();
+}
+
+// ── DASHBOARD ──────────────────────────────────
+const POKER_QUOTES = [
+  { text: "Poker is a skill game pretending to be a chance game.", attr: "James Altucher" },
+  { text: "The cardinal sin in poker is going bust.", attr: "Al Alvarez" },
+  { text: "In poker, you're not playing the cards — you're playing the people.", attr: "Daniel Negreanu" },
+  { text: "Fold and live to fold again.", attr: "Stu Ungar" },
+  { text: "Poker is war. People pretend it's a game.", attr: "Doyle Brunson" },
+  { text: "Limit poker is a science, but no-limit is an art.", attr: "Jack Straus" },
+  { text: "If there weren't luck involved, I would win every time.", attr: "Phil Hellmuth" },
+  { text: "I never go looking for a sucker. I look for a champion and make a sucker of him.", attr: "Canada Bill Jones" },
+  { text: "The chips in front of you are just the score. The game is everything else.", attr: "Anonymous" },
+  { text: "Poker doesn't build character — it reveals it.", attr: "Anonymous" },
+  { text: "Aggression without discipline is just donation.", attr: "Anonymous" },
+  { text: "Tonight someone at this table makes a decision they'll think about for a week. Make sure it isn't you.", attr: "Anonymous" },
+  { text: "Every hand is a battle. Every session is a war.", attr: "Anonymous" },
+  { text: "Poker is a hard way to make an easy living.", attr: "Doyle Brunson" },
+  { text: "The dangerous player is not the one with the best cards — it's the one with the clearest mind.", attr: "Anonymous" },
+  { text: "You can shear a sheep many times, but skin it only once.", attr: "Amarillo Slim" },
+  { text: "All the money you win at poker was someone else's plan.", attr: "Anonymous" },
+  { text: "A man with money is no match against a man on a mission.", attr: "Doyle Brunson" },
+  { text: "The strongest move at the table is knowing when you're beat.", attr: "Anonymous" },
+  { text: "Trust your reads. Doubt your ego.", attr: "Anonymous" },
+  { text: "There is more to poker than life.", attr: "Tom McEvoy" },
+  { text: "The goal is not to win the hand — it's to win the session.", attr: "Anonymous" },
+  { text: "Show me a good loser and I'll show you a loser.", attr: "Stu Ungar" },
+  { text: "Nobody is always a winner, and anybody who says he is, is either a liar or doesn't play poker.", attr: "Amarillo Slim" },
+  { text: "The best hand is the one you never had to show.", attr: "Anonymous" },
+  { text: "Position is power. Act accordingly.", attr: "Anonymous" },
+  { text: "Scared money never wins.", attr: "Anonymous" },
+  { text: "Even a fish won't get caught if it keeps its mouth shut.", attr: "Anonymous" },
+  { text: "The mark of a great poker player is making the right decision when the wrong one feels easier.", attr: "Anonymous" },
+  { text: "The best bluff is the one you never had to make.", attr: "Anonymous" },
+];
+
+function getDailyQuote() {
+  const pool = (allData.quotes && allData.quotes.length) ? allData.quotes : POKER_QUOTES;
+  const now = new Date();
+  const seed = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
+  return pool[seed % pool.length];
+}
+
+function renderDashboard() {
+  const el = document.getElementById("tab-dashboard");
+  loadData();
+  const games = allData.games || [];
+  const lastGame = games[games.length - 1];
+  const quote = getDailyQuote();
+
+  let html = `
+    <div class="g-card" style="border-color:rgba(201,168,76,0.25);background:rgba(0,0,0,0.15);margin-bottom:1.25rem">
+      <div style="font-size:10px;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;opacity:0.8">Quote of the Day</div>
+      <div style="font-family:'Playfair Display',serif;font-size:16px;color:#f5f0e8;line-height:1.55;font-style:italic">"${quote.text}"</div>
+      <div style="font-size:12px;color:var(--gold);margin-top:10px;opacity:0.75">— ${quote.attr}</div>
+    </div>
+  `;
+
+  html += `<div class="section-title">Last Game Settlement</div>`;
+
+  if (!lastGame) {
+    html += '<div class="g-card"><div class="empty-state">No games played yet.</div></div>';
+  } else {
+    const s = lastGame.settlement || [];
+    const gameLabel = lastGame.name ? `${lastGame.name}` : lastGame.date;
+    const gameSub = lastGame.name ? lastGame.date : "";
+    html += '<div class="g-card">';
+    html += `<div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(201,168,76,0.1)">
+      <div style="font-family:'Playfair Display',serif;font-size:15px;color:var(--gold)">${gameLabel}</div>
+      ${gameSub ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px">${gameSub}</div>` : ""}
+      <div style="font-size:11px;color:var(--text-dim);margin-top:3px">${s.length} transaction${s.length !== 1 ? "s" : ""} to settle</div>
+    </div>`;
+    if (!s.length) {
+      html += '<div class="empty-state" style="padding:0.5rem 0">Everyone broke even!</div>';
+    } else {
+      s.forEach(t => {
+        const from = allData.users[t.from]?.username || "?";
+        const to = allData.users[t.to]?.username || "?";
+        html += `<div class="settle-row">
+          <div class="avatar" style="width:24px;height:24px;font-size:9px">${initials(from)}</div>
+          <span style="font-size:13px;font-weight:500">${from}</span>
+          <span class="arrow">→</span>
+          <div class="avatar" style="width:24px;height:24px;font-size:9px;background:rgba(110,207,138,0.15);border-color:rgba(110,207,138,0.3)">${initials(to)}</div>
+          <span style="font-size:13px;font-weight:500">${to}</span>
+          <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
+        </div>`;
+      });
+    }
+    html += "</div>";
+  }
+
+  el.innerHTML = html;
+}
+
+// ── NEW GAME ───────────────────────────────────
+function renderGame() {
+  const el = document.getElementById("tab-game");
+  const activePlayers = activeGame.entries.filter(e => !e.cashedOut).length;
+  const totalBuyIn = activeGame.entries.reduce((s, e) => s + e.buyIn, 0);
+  const totalCashOut = activeGame.entries.reduce((s, e) => s + (e.cashedOut ? e.cashOut : 0), 0);
+
+  let html = `<div class="section-title">New Game</div>`;
+
+  if (activeGame.entries.length > 0) {
+    html += `<div class="live-badge"><div class="live-dot"></div> Game in progress</div>`;
+  }
+
+  html += `<div class="g-card">
+    <span class="g-label">Game Name <span style="color:var(--text-dim);font-size:10px">(optional — useful if playing multiple games in a day)</span></span>
+    <input class="g-input" type="text" id="gname" placeholder='e.g. "Friday Night Game 1"' maxlength="40" value="${activeGame.name}" oninput="activeGame.name=this.value">
+    <span class="g-label">Date</span>
+    <input class="g-input" type="date" id="gdate" value="${activeGame.date}" onchange="activeGame.date=this.value">
+  `;
+
+  if (activeGame.entries.length > 0) {
+    html += `<div class="pot-summary">
+      <span style="color:var(--text-muted)">Total buy-in: <strong style="color:var(--text-primary)">$${totalBuyIn.toFixed(2)}</strong></span>
+      <span style="color:var(--text-muted)">Cashed out: <strong style="color:var(--success)">$${totalCashOut.toFixed(2)}</strong></span>
+    </div>`;
+
+    html += `<div class="ge-label-row">
+      <span class="ge-label">Player</span>
+      <span class="ge-label" style="text-align:center">Buy-in ($)</span>
+      <span class="ge-label" style="text-align:center">Cash-out ($)</span>
+      <span class="ge-label"></span>
+      <span class="ge-label"></span>
+    </div>`;
+
+    activeGame.entries.forEach((e, i) => {
+      const u = allData.users[e.userId];
+      const name = u?.username || "?";
+      const isOut = e.cashedOut;
+      const buyInInput = `<input class="g-input" style="margin-bottom:0;padding:5px 7px;font-size:12px;text-align:center" type="number" min="0" placeholder="0" value="${e.buyIn || ""}" ${isOut ? "disabled" : `oninput="activeGame.entries[${i}].buyIn=parseFloat(this.value)||0"`}>`;
+      const cashOutInput = `<input class="g-input" style="margin-bottom:0;padding:5px 7px;font-size:12px;text-align:center;${isOut ? "color:var(--success);border-color:rgba(110,207,138,0.35);" : ""}" type="number" min="0" placeholder="—" value="${isOut ? e.cashOut : (e.cashOut || "")}" ${isOut ? "disabled" : `oninput="activeGame.entries[${i}].cashOut=parseFloat(this.value)||0"`}>`;
+      const confirmBtn = isOut
+        ? `<button class="icon-btn" style="color:var(--success);border-color:rgba(110,207,138,0.3)" onclick="undoCashout(${i})" title="Undo">↺</button>`
+        : `<button class="icon-btn" style="color:var(--success);border-color:rgba(110,207,138,0.3)" onclick="confirmCashout(${i})" title="Confirm cash-out">✓</button>`;
+      html += `<div class="player-game-row${isOut ? " cashed-out" : ""}">
+        <div style="display:flex;align-items:center;gap:6px;overflow:hidden">
+          <div class="avatar" style="width:22px;height:22px;font-size:9px${isOut ? ";opacity:0.5" : ""}">${initials(name)}</div>
+          <span style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</span>
+          <span class="status-pill${isOut ? " out" : ""}">${isOut ? "out" : "in"}</span>
+        </div>
+        ${buyInInput}
+        ${cashOutInput}
+        ${confirmBtn}
+        <button class="icon-btn remove-btn" onclick="removeEntry(${i})" title="Remove">✕</button>
+      </div>`;
+    });
+  } else {
+    html += '<div class="empty-state" style="padding:1rem 0">No players yet — add your crew below.</div>';
+  }
+
+  html += `<div style="display:flex;gap:8px;margin-top:0.75rem;flex-wrap:wrap;align-items:center">
+    <button class="btn-sm" onclick="openPlayerModal()">+ Add player</button>`;
+
+  if (activeGame.entries.length > 0) {
+    const allCashedOut = activeGame.entries.length > 0 && activeGame.entries.every(e => e.cashedOut);
+    html += `<button class="btn-sm" onclick="addRebuy()" style="color:var(--text-muted)">+ Re-buy</button>`;
+    html += `<button class="btn-sm primary" style="margin-left:auto" onclick="saveGame()" ${!allCashedOut ? 'title="Cash out all players first"' : ""}>End &amp; Save ↗</button>`;
+    html += `<button class="btn-sm danger" onclick="clearGame()">Clear</button>`;
+  }
+
+  html += "</div></div>";
+
+  // Settlement preview
+  html += `<div id="settlement-preview-wrap">`;
+  if (activeGame.entries.some(e => e.cashedOut)) {
+    const preview = buildSettlementPreview();
+    if (preview.length) {
+      html += `<div class="section-title" style="margin-top:1rem">Settlement Preview</div><div class="g-card"><div id="settlement-preview">`;
+      preview.forEach(t => {
+        html += `<div class="settle-row">
+          <span style="font-weight:500">${allData.users[t.from]?.username || "?"}</span>
+          <span class="arrow">→</span>
+          <span style="font-weight:500">${allData.users[t.to]?.username || "?"}</span>
+          <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
+        </div>`;
+      });
+      html += `</div></div>`;
+    } else {
+      html += `<div id="settlement-preview"></div>`;
+    }
+  } else {
+    html += `<div id="settlement-preview"></div>`;
+  }
+  html += `</div>`;
+
+  el.innerHTML = html;
+}
+
+function buildSettlementPreview() {
+  const cashedEntries = activeGame.entries.filter(e => e.cashedOut);
+  if (cashedEntries.length < 2) return [];
+  return calcSettlement(cashedEntries);
+}
+
+function removeEntry(i) {
+  activeGame.entries.splice(i, 1);
+  renderGame();
+}
+
+function confirmCashout(i) {
+  const amount = activeGame.entries[i].cashOut;
+  if (isNaN(amount) || amount < 0) {
+    showToast("Enter a valid cash-out amount first");
+    return;
+  }
+  activeGame.entries[i].cashedOut = true;
+  renderGame();
+  refreshSettlementPreview();
+}
+
+function refreshSettlementPreview() {
+  const cashedEntries = activeGame.entries.filter(e => e.cashedOut);
+  const previewEl = document.getElementById("settlement-preview");
+  if (!previewEl) return;
+  if (cashedEntries.length >= 2) {
+    const txns = buildSettlementPreview();
+    previewEl.innerHTML = txns.length
+      ? txns.map(t => `<div class="settle-row">
+          <span style="font-weight:500">${allData.users[t.from]?.username || "?"}</span>
+          <span class="arrow">→</span>
+          <span style="font-weight:500">${allData.users[t.to]?.username || "?"}</span>
+          <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
+        </div>`).join("")
+      : "";
+  } else {
+    previewEl.innerHTML = "";
+  }
+}
+
+function undoCashout(i) {
+  activeGame.entries[i].cashedOut = false;
+  activeGame.entries[i].cashOut = 0;
+  renderGame();
+}
+
+function openPlayerModal() {
+  loadData();
+  const inGame = activeGame.entries.map(e => e.userId);
+  const avail = Object.values(allData.users).filter(u => !inGame.includes(u.id));
+  const el = document.getElementById("player-modal-list");
+  if (!avail.length) {
+    el.innerHTML = '<div class="empty-state">All registered players are in this game.<br>They can join at <strong style="color:var(--gold)">thefelt.app</strong></div>';
+  } else {
+    el.innerHTML = avail.map(u => `
+      <div class="player-pick-row" onclick="addToGame('${u.id}')">
+        <div class="avatar">${initials(u.username)}</div>
+        <div>
+          <div style="font-size:14px">${u.username}</div>
+          <div style="font-size:11px;color:var(--text-dim)">${u.email}</div>
+        </div>
+      </div>
+    `).join("");
+  }
+  document.getElementById("player-modal").classList.add("open");
+}
+
+function closePlayerModal() { document.getElementById("player-modal").classList.remove("open"); }
+
+function addToGame(userId) {
+  activeGame.entries.push({ userId, buyIn: 0, cashOut: 0, cashedOut: false });
+  closePlayerModal();
+  renderGame();
+}
+
+function addRebuy() {
+  // Allows adding a player who already cashed out back in (re-buy)
+  openPlayerModal();
+}
+
+// ── CASH OUT MODAL ─────────────────────────────
+function openCashout(idx) {
+  cashoutTargetIdx = idx;
+  const e = activeGame.entries[idx];
+  const u = allData.users[e.userId];
+  document.getElementById("cashout-title").textContent = `Cash Out — ${u?.username || "Player"}`;
+  document.getElementById("cashout-amount").value = "";
+  document.getElementById("cashout-err").style.display = "none";
+  document.getElementById("cashout-modal").classList.add("open");
+  setTimeout(() => document.getElementById("cashout-amount").focus(), 100);
+}
+
+function closeCashoutModal() {
+  document.getElementById("cashout-modal").classList.remove("open");
+  cashoutTargetIdx = null;
+}
+
+function confirmCashout() {
+  const amount = parseFloat(document.getElementById("cashout-amount").value);
+  const errEl = document.getElementById("cashout-err");
+  errEl.style.display = "none";
+  if (isNaN(amount) || amount < 0) {
+    errEl.textContent = "Enter a valid amount.";
+    errEl.style.display = "block"; return;
+  }
+  if (cashoutTargetIdx === null) return;
+  activeGame.entries[cashoutTargetIdx].cashOut = amount;
+  activeGame.entries[cashoutTargetIdx].cashedOut = true;
+  closeCashoutModal();
+  renderGame();
+}
+
+// ── SETTLEMENT ─────────────────────────────────
+function calcSettlement(entries) {
+  const bals = entries.map(e => ({ userId: e.userId, bal: e.cashOut - e.buyIn }));
+  const debtors = bals.filter(b => b.bal < -0.005).map(b => ({ ...b }));
+  const creditors = bals.filter(b => b.bal > 0.005).map(b => ({ ...b }));
+  debtors.sort((a, b) => a.bal - b.bal);
+  creditors.sort((a, b) => b.bal - a.bal);
+  const txns = []; let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const amt = Math.min(-debtors[i].bal, creditors[j].bal);
+    if (amt > 0.005) txns.push({ from: debtors[i].userId, to: creditors[j].userId, amount: Math.round(amt * 100) / 100 });
+    debtors[i].bal += amt; creditors[j].bal -= amt;
+    if (Math.abs(debtors[i].bal) < 0.005) i++;
+    if (Math.abs(creditors[j].bal) < 0.005) j++;
+  }
+  return txns;
+}
+
+function saveGame() {
+  if (!activeGame.entries.length) { showToast("No players in this game"); return; }
+
+  const notCashedOut = activeGame.entries.filter(e => !e.cashedOut).map(e => allData.users[e.userId]?.username);
+  if (notCashedOut.length > 0) {
+    showToast(`Still at the table: ${notCashedOut.join(", ")}`);
+    return;
+  }
+
+  const entries = activeGame.entries.map(e => ({ userId: e.userId, buyIn: e.buyIn, cashOut: e.cashOut }));
+  const totalIn = entries.reduce((s, e) => s + e.buyIn, 0);
+  const totalOut = entries.reduce((s, e) => s + e.cashOut, 0);
+  if (Math.abs(totalIn - totalOut) > 1.00) {
+    showToast(`Buy-ins ($${totalIn.toFixed(2)}) ≠ cash-outs ($${totalOut.toFixed(2)})`);
+    return;
+  }
+
+  loadData();
+  if (!allData.games) allData.games = [];
+  allData.games.push({
+    id: "g_" + Date.now(),
+    date: activeGame.date,
+    name: activeGame.name || "",
+    entries,
+    settlement: calcSettlement(entries)
+  });
+  saveData();
+  activeGame = { date: new Date().toISOString().split("T")[0], name: "", entries: [] };
+  showToast("Game saved!");
+  const nav = document.querySelectorAll(".nav-item");
+  nav.forEach(n => n.classList.remove("active"));
+  nav[0].classList.add("active");
+  switchTab("dashboard", nav[0]);
+}
+
+function clearGame() {
+  if (!confirm("Clear this game? All entries will be lost.")) return;
+  activeGame = { date: new Date().toISOString().split("T")[0], name: "", entries: [] };
+  renderGame();
+}
+
+// ── HISTORY ────────────────────────────────────
+function renderHistory() {
+  const el = document.getElementById("tab-history");
+  loadData();
+  const games = [...(allData.games || [])].reverse();
+  let html = `<div class="section-title">Game History</div>`;
+  if (!games.length) {
+    html += '<div class="g-card"><div class="empty-state">No games yet.</div></div>';
+    el.innerHTML = html; return;
+  }
+  games.forEach(g => {
+    const pot = g.entries.reduce((s, e) => s + e.buyIn, 0);
+    const playerNames = g.entries.map(e => allData.users[e.userId]?.username || "?").join(", ");
+    const displayName = g.name ? g.name : g.date;
+    const subtitle = g.name ? g.date : "";
+    html += `<div class="g-card" style="cursor:pointer" onclick="showGameDetail('${g.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-weight:500;font-size:14px">${displayName}</div>
+          ${subtitle ? `<div style="font-size:11px;color:var(--gold-light);opacity:0.7;margin-top:1px">${subtitle}</div>` : ""}
+          <div class="history-meta">${g.entries.length} players · ${g.settlement?.length || 0} transactions to settle</div>
+        </div>
+        <span class="chip">$${pot.toFixed(0)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:6px">${playerNames}</div>
+    </div>`;
+  });
+  el.innerHTML = html;
+}
+
+function showGameDetail(gid) {
+  loadData();
+  const g = allData.games.find(x => x.id === gid);
+  if (!g) return;
+  const results = g.entries.map(e => ({
+    name: allData.users[e.userId]?.username || "?",
+    buyIn: e.buyIn, cashOut: e.cashOut, net: e.cashOut - e.buyIn
+  })).sort((a, b) => b.net - a.net);
+  const s = g.settlement || [];
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+    <div>
+      <div class="modal-title" style="margin-bottom:0">${g.name || g.date}</div>
+      ${g.name ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px">${g.date}</div>` : ""}
+    </div>
+    ${isAdmin() ? `<button class="btn-sm danger" onclick="deleteGame('${g.id}')">Delete</button>` : ""}
+  </div><div style="margin-bottom:1rem">`;
+
+  results.forEach(r => {
+    const cls = r.net > 0 ? "net-pos" : r.net < 0 ? "net-neg" : "net-zero";
+    html += `<div class="ldb-row">
+      <div class="avatar" style="width:24px;height:24px;font-size:9px">${initials(r.name)}</div>
+      <div style="flex:1">
+        <div style="font-size:13px">${r.name}</div>
+        <div style="font-size:11px;color:var(--text-dim)">In: $${r.buyIn.toFixed(2)} → Out: $${r.cashOut.toFixed(2)}</div>
+      </div>
+      <div class="${cls}" style="font-size:13px">${fmtNet(r.net)}</div>
+    </div>`;
+  });
+
+  html += `</div><div style="border-top:1px solid rgba(201,168,76,0.15);padding-top:1rem;margin-bottom:0.75rem;font-size:12px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase">Settlement · ${s.length} transaction${s.length !== 1 ? "s" : ""}</div>`;
+
+  if (!s.length) {
+    html += '<div class="empty-state" style="padding:0.5rem 0">Everyone broke even!</div>';
+  } else {
+    s.forEach(t => {
+      html += `<div class="settle-row">
+        <span style="font-weight:500">${allData.users[t.from]?.username || "?"}</span>
+        <span class="arrow">→</span>
+        <span style="font-weight:500">${allData.users[t.to]?.username || "?"}</span>
+        <span class="gold-badge" style="margin-left:auto">$${t.amount.toFixed(2)}</span>
+      </div>`;
+    });
+  }
+  html += `<div class="modal-footer"><button class="btn-sm" onclick="closeDetailModal()">Close</button></div>`;
+  document.getElementById("detail-modal-body").innerHTML = html;
+  document.getElementById("detail-modal").classList.add("open");
+}
+
+function closeDetailModal() { document.getElementById("detail-modal").classList.remove("open"); }
+
+function deleteGame(gid) {
+  if (!isAdmin()) { showToast("Admin access required"); return; }
+  if (!confirm("Delete this game? This cannot be undone.")) return;
+  loadData();
+  allData.games = allData.games.filter(g => g.id !== gid);
+  saveData();
+  closeDetailModal();
+  showToast("Game deleted");
+  renderHistory();
+}
+
+// ── PROFILE ────────────────────────────────────
+function renderProfile() {
+  const el = document.getElementById("tab-profile");
+  loadData();
+  const games = allData.games || [];
+  let net = 0, gs = 0, wins = 0, bigWin = -Infinity, bigLoss = Infinity;
+  games.forEach(g => {
+    const e = g.entries.find(x => x.userId === currentUser.id);
+    if (e) { const n = e.cashOut - e.buyIn; net += n; gs++; if (n > 0) wins++; if (n > bigWin) bigWin = n; if (n < bigLoss) bigLoss = n; }
+  });
+  if (gs === 0) { bigWin = 0; bigLoss = 0; }
+  const netCls = net > 0 ? "pos" : net < 0 ? "neg" : "";
+
+  el.innerHTML = `
+    <div class="section-title">My Stats</div>
+    <div class="g-card" style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">
+      <div class="avatar" style="width:48px;height:48px;font-size:18px;background:rgba(201,168,76,0.2);border-color:var(--gold)">${initials(currentUser.username)}</div>
+      <div>
+        <div style="font-size:18px;font-weight:500;color:var(--gold)">${currentUser.username}</div>
+        <div style="font-size:12px;color:var(--text-dim)">${currentUser.email}</div>
+      </div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-label">Games</div><div class="stat-val">${gs}</div></div>
+      <div class="stat-box"><div class="stat-label">Wins</div><div class="stat-val">${wins}</div></div>
+      <div class="stat-box"><div class="stat-label">Lifetime net</div><div class="stat-val ${netCls}">${fmtNet(net)}</div></div>
+      <div class="stat-box"><div class="stat-label">Win rate</div><div class="stat-val">${gs ? Math.round(wins / gs * 100) : 0}%</div></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-label">Best session</div><div class="stat-val pos">${gs ? fmtNet(bigWin) : "—"}</div></div>
+      <div class="stat-box"><div class="stat-label">Worst session</div><div class="stat-val neg">${gs ? fmtNet(bigLoss) : "—"}</div></div>
+    </div>
+  `;
+}
+
+// ── STATS (LEADERBOARD) ────────────────────────
+function renderStats() {
+  const el = document.getElementById("tab-stats");
+  loadData();
+  const users = Object.values(allData.users);
+  const games = allData.games || [];
+
+  const stats = users.map(u => {
+    let net = 0, gs = 0, wins = 0;
+    games.forEach(g => {
+      const e = g.entries.find(x => x.userId === u.id);
+      if (e) { const n = e.cashOut - e.buyIn; net += n; gs++; if (n > 0) wins++; }
+    });
+    return { ...u, net, games: gs, wins };
+  }).sort((a, b) => b.net - a.net);
+
+  const totalPot = games.reduce((s, g) => s + g.entries.reduce((ss, e) => ss + e.buyIn, 0), 0);
+
+  let html = `
+    <div class="section-title">Leaderboard</div>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-label">Games played</div><div class="stat-val">${games.length}</div></div>
+      <div class="stat-box"><div class="stat-label">Total money played</div><div class="stat-val">$${totalPot.toFixed(0)}</div></div>
+    </div>
+    <div class="g-card">
+  `;
+
+  if (!stats.length) {
+    html += '<div class="empty-state">No players yet.</div>';
+  } else {
+    stats.forEach((p, i) => {
+      const cls = p.net > 0 ? "net-pos" : p.net < 0 ? "net-neg" : "net-zero";
+      const isMe = p.id === currentUser.id;
+      html += `<div class="ldb-row">
+        <div class="rank-num">${i + 1}</div>
+        <div class="avatar" style="${isMe ? "border-color:var(--gold);background:rgba(201,168,76,0.25)" : ""}">${initials(p.username)}</div>
+        <div style="flex:1">
+          <div class="ldb-name" style="${isMe ? "color:var(--gold)" : ""}">${p.username}${isMe ? " ★" : ""}</div>
+          <div class="ldb-sub">${p.games} games · ${p.wins} wins</div>
+        </div>
+        <div class="${cls}">${fmtNet(p.net)}</div>
+      </div>`;
+    });
+  }
+  html += "</div>";
+  el.innerHTML = html;
+}
+
+// ── ADMIN ──────────────────────────────────────
+function renderAdmin() {
+  if (!isAdmin()) { showToast("Admin access required"); return; }
+  const el = document.getElementById("tab-admin");
+  loadData();
+  const users = Object.values(allData.users);
+  const quotes = allData.quotes || POKER_QUOTES.map(q => ({ ...q }));
+
+  let html = `<div class="section-title">Admin Panel</div>`;
+
+  // ── Players ──
+  html += `<div class="section-title" style="font-size:16px;margin-bottom:0.75rem">Players</div>
+    <div class="g-card" style="margin-bottom:1.25rem">`;
+  if (!users.length) {
+    html += '<div class="empty-state">No players registered.</div>';
+  } else {
+    users.forEach(u => {
+      const isSelf = u.id === currentUser.id;
+      html += `<div class="ldb-row">
+        <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(u.username)}</div>
+        <div style="flex:1">
+          <div style="font-size:13px;color:#f5f0e8">${u.username}</div>
+          <div style="font-size:11px;color:var(--text-dim)">${u.email}</div>
+        </div>
+        ${isSelf ? `<span style="font-size:11px;color:var(--text-dim);padding:0 8px">you</span>` : `<button class="btn-sm danger" style="padding:4px 10px;font-size:12px" onclick="removePlayer('${u.id}')">Remove</button>`}
+      </div>`;
+    });
+  }
+  html += `</div>`;
+
+  // ── Quotes ──
+  html += `<div class="section-title" style="font-size:16px;margin-bottom:0.75rem">Quotes</div>
+    <div class="g-card" style="margin-bottom:0.75rem">
+      <span class="g-label">Add a new quote</span>
+      <input class="g-input" type="text" id="new-quote-text" placeholder='e.g. "The cards are the same for everyone."' maxlength="200">
+      <span class="g-label">Attribution</span>
+      <input class="g-input" type="text" id="new-quote-attr" placeholder="Author name or Anonymous" maxlength="60">
+      <button class="btn-sm" onclick="addQuote()" style="margin-top:0.25rem">+ Add quote</button>
+    </div>
+    <div class="g-card">`;
+
+  quotes.forEach((q, i) => {
+    html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid rgba(201,168,76,0.08)">
+      <div style="flex:1">
+        <div style="font-size:13px;font-style:italic;color:#f5f0e8;line-height:1.4">"${q.text}"</div>
+        <div style="font-size:11px;color:var(--gold);margin-top:4px;opacity:0.75">— ${q.attr}</div>
+      </div>
+      <button class="icon-btn rm" onclick="deleteQuote(${i})" title="Delete" style="flex-shrink:0;margin-top:2px">✕</button>
+    </div>`;
+  });
+  html += `</div>`;
+
+  el.innerHTML = html;
+}
+
+function removePlayer(uid) {
+  if (!isAdmin()) return;
+  const u = allData.users[uid];
+  if (!confirm(`Remove ${u?.username} from the club? This cannot be undone.`)) return;
+  loadData();
+  delete allData.users[uid];
+  saveData();
+  showToast(`${u?.username} removed`);
+  renderAdmin();
+}
+
+function addQuote() {
+  if (!isAdmin()) return;
+  const text = document.getElementById("new-quote-text").value.trim();
+  const attr = document.getElementById("new-quote-attr").value.trim() || "Anonymous";
+  if (!text) { showToast("Enter a quote first"); return; }
+  loadData();
+  if (!allData.quotes) allData.quotes = POKER_QUOTES.map(q => ({ ...q }));
+  allData.quotes.push({ text, attr });
+  saveData();
+  showToast("Quote added ✓");
+  renderAdmin();
+}
+
+function deleteQuote(idx) {
+  if (!isAdmin()) return;
+  if (!confirm("Delete this quote?")) return;
+  loadData();
+  if (!allData.quotes) allData.quotes = POKER_QUOTES.map(q => ({ ...q }));
+  allData.quotes.splice(idx, 1);
+  saveData();
+  showToast("Quote deleted");
+  renderAdmin();
+}
+
+// ── INIT ───────────────────────────────────────
+(function init() {
+  loadData();
+  try {
+    const uid = sessionStorage.getItem("thefelt_user");
+    if (uid && allData.users[uid]) {
+      currentUser = allData.users[uid];
+      enterApp();
+    }
+  } catch (e) {}
+
+  // Enter key on cashout modal
+  document.getElementById("cashout-amount").addEventListener("keydown", e => {
+    if (e.key === "Enter") confirmCashout();
+  });
+})();

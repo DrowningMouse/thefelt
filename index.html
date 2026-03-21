@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Felt — Private Poker Club</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+
+<!-- ═══ LANDING ═══ -->
+<div id="landing" class="screen active">
+  <div class="felt-pattern"></div>
+  <div class="suit-bg tl">♠</div>
+  <div class="suit-bg br">♦</div>
+  <div class="landing-card">
+    <div class="logo">
+      <span class="logo-suits">♠ ♥ ♣ ♦</span>
+      <div class="logo-title">The Felt</div>
+      <div class="logo-sub">Private Poker Club</div>
+    </div>
+    <div class="tab-row">
+      <button class="tab-btn active" onclick="switchAuthTab('login')">Sign In</button>
+      <button class="tab-btn" onclick="switchAuthTab('signup')">Join Club</button>
+    </div>
+    <div id="login-form">
+      <div class="field">
+        <label>Email</label>
+        <input id="login-email" type="email" placeholder="your@email.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input id="login-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+        <div class="error-msg" id="login-err"></div>
+      </div>
+      <button class="btn-gold" onclick="doLogin()" id="login-btn">Deal Me In</button>
+    </div>
+    <div id="signup-form" style="display:none">
+      <div class="field">
+        <label>Club Password</label>
+        <input id="signup-site-pass" type="password" placeholder="Ask your host">
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input id="signup-email" type="email" placeholder="your@email.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label>Table Name <span style="color:var(--text-dim);font-size:11px">(visible to everyone)</span></label>
+        <input id="signup-username" placeholder="e.g. Shortstack" maxlength="20">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input id="signup-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doSignup()">
+      </div>
+      <button class="btn-gold" onclick="doSignup()" id="signup-btn">Claim My Seat</button>
+      <div class="error-msg" id="signup-err" style="margin-top:8px"></div>
+    </div>
+    <div class="site-pass-hint" id="auth-hint">Sign in with your email and password</div>
+  </div>
+</div>
+
+<!-- ═══ APP ═══ -->
+<div id="app" class="screen">
+  <div class="topbar">
+    <div class="topbar-logo">The Felt</div>
+    <div class="user-pill">
+      <div class="avatar" id="topbar-avatar"></div>
+      <span id="topbar-username"></span>
+      <button class="logout-btn" onclick="logout()">Out</button>
+    </div>
+  </div>
+  <div class="nav-bar">
+    <div class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard',this)">Dashboard</div>
+    <div class="nav-item" data-tab="game" onclick="switchTab('game',this)">New Game</div>
+    <div class="nav-item" data-tab="history" onclick="switchTab('history',this)">History</div>
+    <div class="nav-item" data-tab="profile" onclick="switchTab('profile',this)">Me</div>
+    <div class="nav-item" data-tab="stats" onclick="switchTab('stats',this)">Stats</div>
+    <div class="nav-item" id="admin-tab" data-tab="admin" onclick="switchTab('admin',this)" style="display:none">Admin</div>
+  </div>
+  <div class="content">
+    <div id="tab-dashboard"></div>
+    <div id="tab-game" style="display:none"></div>
+    <div id="tab-history" style="display:none"></div>
+    <div id="tab-profile" style="display:none"></div>
+    <div id="tab-stats" style="display:none"></div>
+    <div id="tab-admin" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Add Player Modal -->
+<div class="modal-overlay" id="player-modal" onclick="if(event.target===this)closePlayerModal()">
+  <div class="modal-box">
+    <div class="modal-title">Add Player to Game</div>
+    <div id="player-modal-list"></div>
+    <div class="modal-footer"><button class="btn-sm" onclick="closePlayerModal()">Cancel</button></div>
+  </div>
+</div>
+
+<!-- Game Detail Modal -->
+<div class="modal-overlay" id="detail-modal" onclick="if(event.target===this)closeDetailModal()">
+  <div class="modal-box" id="detail-modal-body"></div>
+</div>
+
+<!-- Cash Out Modal -->
+<div class="modal-overlay" id="cashout-modal" onclick="if(event.target===this)closeCashoutModal()">
+  <div class="modal-box" style="max-width:320px">
+    <div class="modal-title" id="cashout-title">Cash Out</div>
+    <div style="margin-bottom:1rem;font-size:13px;color:var(--text-muted)">Enter final chip count for this player.</div>
+    <span class="g-label">Cash-out amount ($)</span>
+    <input class="g-input" type="number" min="0" id="cashout-amount" placeholder="0.00">
+    <div class="error-msg" id="cashout-err"></div>
+    <div class="modal-footer">
+      <button class="btn-sm" onclick="closeCashoutModal()">Cancel</button>
+      <button class="btn-sm primary" onclick="confirmCashout()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="src/app.js"></script>
+</body>
+</html>
