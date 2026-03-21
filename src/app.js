@@ -67,6 +67,20 @@ function initials(name) {
   return name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
+// Renders username + real name stacked
+function nameBlock(username, realname, size = "normal") {
+  if (size === "sm") {
+    return `<div style="display:flex;flex-direction:column;gap:1px;overflow:hidden;min-width:0">
+      <span style="font-size:12px;color:#f5f0e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${username}</span>
+      ${realname ? `<span style="font-size:10px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${realname}</span>` : ""}
+    </div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:1px">
+    <span style="font-size:14px;color:#f5f0e8">${username}</span>
+    ${realname ? `<span style="font-size:11px;color:var(--text-dim)">${realname}</span>` : ""}
+  </div>`;
+}
+
 function fmtNet(v) {
   if (Math.abs(v) < 0.005) return "$0.00";
   return (v > 0 ? "+$" : "-$") + Math.abs(v).toFixed(2);
@@ -117,6 +131,7 @@ function doLogin() {
 function doSignup() {
   const sitePass = document.getElementById("signup-site-pass").value;
   const email = document.getElementById("signup-email").value.trim().toLowerCase();
+  const realname = document.getElementById("signup-realname").value.trim();
   const username = document.getElementById("signup-username").value.trim();
   const pass = document.getElementById("signup-pass").value;
   const err = document.getElementById("signup-err");
@@ -126,7 +141,7 @@ function doSignup() {
     err.textContent = "Wrong club password. Ask your host.";
     err.style.display = "block"; return;
   }
-  if (!email || !username || !pass) {
+  if (!email || !realname || !username || !pass) {
     err.textContent = "All fields are required.";
     err.style.display = "block"; return;
   }
@@ -147,7 +162,7 @@ function doSignup() {
   }
 
   const id = "u_" + Date.now();
-  const user = { id, email, username, password: btoa(pass) };
+  const user = { id, email, realname, username, password: btoa(pass) };
   allData.users[id] = user;
   saveData();
   currentUser = user;
@@ -233,12 +248,11 @@ function enterApp() {
 function switchTab(tab, el) {
   document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
   if (el) el.classList.add("active");
-  ["dashboard", "live", "game", "history", "profile", "stats", "admin"].forEach(t => {
+  ["dashboard", "live", "history", "profile", "stats", "admin"].forEach(t => {
     document.getElementById("tab-" + t).style.display = t === tab ? "block" : "none";
   });
   if (tab === "dashboard") renderDashboard();
   if (tab === "live") renderLiveTab();
-  if (tab === "game") renderGame();
   if (tab === "history") renderHistory();
   if (tab === "profile") renderProfile();
   if (tab === "stats") renderStats();
@@ -716,6 +730,7 @@ function renderProfile() {
       <div class="avatar" style="width:48px;height:48px;font-size:18px;background:rgba(201,168,76,0.2);border-color:var(--gold)">${initials(currentUser.username)}</div>
       <div>
         <div style="font-size:18px;font-weight:500;color:var(--gold)">${currentUser.username}</div>
+        ${currentUser.realname ? `<div style="font-size:13px;color:var(--text-primary)">${currentUser.realname}</div>` : ""}
         <div style="font-size:12px;color:var(--text-dim)">${currentUser.email}</div>
       </div>
     </div>
@@ -770,6 +785,7 @@ function renderStats() {
         <div class="avatar" style="${isMe ? "border-color:var(--gold);background:rgba(201,168,76,0.25)" : ""}">${initials(p.username)}</div>
         <div style="flex:1">
           <div class="ldb-name" style="${isMe ? "color:var(--gold)" : ""}">${p.username}${isMe ? " ★" : ""}</div>
+          ${p.realname ? `<div style="font-size:11px;color:var(--text-dim)">${p.realname}</div>` : ""}
           <div class="ldb-sub">${p.games} games · ${p.wins} wins</div>
         </div>
         <div class="${cls}">${fmtNet(p.net)}</div>
@@ -809,6 +825,7 @@ function renderAdmin() {
         <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(u.username)}</div>
         <div style="flex:1">
           <div style="font-size:13px;color:#f5f0e8">${u.username}${isSelf ? " <span style='font-size:10px;color:var(--text-dim)'>(you)</span>" : ""}</div>
+          ${u.realname ? `<div style="font-size:12px;color:var(--text-primary)">${u.realname}</div>` : ""}
           <div style="font-size:11px;color:var(--text-dim)">${u.email} · ${gs} game${gs !== 1 ? "s" : ""} · <span style="${netCls}">${fmtNet(net)}</span></div>
         </div>
         ${isSelf ? "" : `<button class="btn-sm danger" style="padding:4px 10px;font-size:12px" onclick="removePlayer('${u.id}')">Remove</button>`}
@@ -981,44 +998,55 @@ function renderLiveTracker(el) {
       <span style="color:var(--text-muted)">Cashed out: <strong style="color:#6ecf8a">$${cashedOut.toFixed(2)}</strong></span>
     </div>
     <div class="g-card" style="margin-bottom:1rem">
-      <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;margin-bottom:6px;align-items:end">
+      <div style="display:grid;grid-template-columns:1fr 90px 80px 60px;gap:8px;margin-bottom:6px;align-items:end">
         <span class="ge-label">Player</span>
         <span class="ge-label" style="text-align:center">Total buy-in</span>
-        <span class="ge-label"></span>
+        <span class="ge-label" style="text-align:center">+ Buy-in</span>
+        ${isStarter ? `<span class="ge-label" style="text-align:center">Cash Out</span>` : `<span class="ge-label"></span>`}
       </div>`;
 
   Object.values(players).forEach(p => {
     const uname = p.username || allData.users[p.userId]?.username || "?";
+    const realname = allData.users[p.userId]?.realname || "";
     const ini = initials(uname);
     const buyIns = p.buyIns || [];
 
     if (p.cashedOut) {
       html += `
-        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08);opacity:0.6">
-          <div style="display:flex;align-items:center;gap:6px">
+        <div style="display:grid;grid-template-columns:1fr 90px 80px 60px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08);opacity:0.6">
+          <div style="display:flex;align-items:center;gap:6px;overflow:hidden">
             <div class="avatar" style="width:24px;height:24px;font-size:9px;opacity:0.5">${ini}</div>
-            <span style="font-size:13px">${uname}</span>
+            <div style="overflow:hidden;min-width:0">
+              <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${uname}</div>
+              ${realname ? `<div style="font-size:10px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${realname}</div>` : ""}
+            </div>
+            ${p.userId === g.startedBy ? `<span style="font-size:10px;color:var(--gold);flex-shrink:0" title="Game owner">★</span>` : ""}
             <span class="status-pill out">out</span>
           </div>
           <span style="font-size:13px;color:#6ecf8a;text-align:center">$${(p.totalBuyIn||0).toFixed(0)}</span>
-          <div style="display:flex;gap:4px">
+          <span></span>
+          <div style="display:flex;justify-content:center">
             ${isStarter ? `<button class="icon-btn undo" onclick="liveUndoCashout('${p.userId}')" title="Undo">↺</button>` : ""}
           </div>
         </div>`;
     } else {
       html += `
-        <div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08)">
+        <div style="display:grid;grid-template-columns:1fr 90px 80px 60px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(201,168,76,0.08)">
           <div style="display:flex;align-items:center;gap:6px;overflow:hidden">
             <div class="avatar" style="width:24px;height:24px;font-size:9px">${ini}</div>
-            <div style="overflow:hidden">
+            <div style="overflow:hidden;min-width:0">
               <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${uname}</div>
+              ${realname ? `<div style="font-size:10px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${realname}</div>` : ""}
               ${buyIns.length > 1 ? `<div style="font-size:10px;color:var(--text-dim)">${buyIns.length} buy-ins</div>` : ""}
             </div>
+            ${p.userId === g.startedBy ? `<span style="font-size:10px;color:var(--gold);flex-shrink:0" title="Game owner">★</span>` : ""}
             <span class="status-pill">in</span>
           </div>
           <span style="font-size:14px;font-weight:500;color:#f5f0e8;text-align:center;white-space:nowrap">$${(p.totalBuyIn||0).toFixed(0)}</span>
-          <div style="display:flex;gap:4px">
+          <div style="display:flex;justify-content:center">
             <button class="icon-btn" style="border-color:rgba(201,168,76,0.5);color:var(--gold);font-size:11px;width:auto;padding:0 8px" onclick="openRebuy('${p.userId}','${uname}')">+ Buy-in</button>
+          </div>
+          <div style="display:flex;justify-content:center">
             ${isStarter ? `<button class="icon-btn confirm" onclick="openLiveCashout('${p.userId}','${uname}')" title="Cash out">✓</button>` : ""}
           </div>
         </div>`;

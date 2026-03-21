@@ -74,7 +74,11 @@
         <input id="signup-email" type="email" placeholder="your@email.com" autocomplete="email">
       </div>
       <div class="field">
-        <label>Table Name <span style="color:var(--text-dim);font-size:11px">(visible to everyone)</span></label>
+        <label>Your Name</label>
+        <input id="signup-realname" placeholder="e.g. Dylan Minto" maxlength="40">
+      </div>
+      <div class="field">
+        <label>Table Name <span style="color:var(--text-dim);font-size:11px">(your poker nickname)</span></label>
         <input id="signup-username" placeholder="e.g. Shortstack" maxlength="20">
       </div>
       <div class="field">
@@ -101,9 +105,8 @@
   <div class="nav-bar">
     <div class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard',this)">Dashboard</div>
     <div class="nav-item" data-tab="live" onclick="switchTab('live',this)" id="live-tab">
-      Live <span id="live-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:#6ecf8a;display:none;margin-left:3px;animation:pulse 1.5s infinite;vertical-align:middle"></span>
+      Live Game <span id="live-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:#6ecf8a;display:none;margin-left:3px;animation:pulse 1.5s infinite;vertical-align:middle"></span>
     </div>
-    <div class="nav-item" data-tab="game" onclick="switchTab('game',this)">New Game</div>
     <div class="nav-item" data-tab="history" onclick="switchTab('history',this)">History</div>
     <div class="nav-item" data-tab="profile" onclick="switchTab('profile',this)">Me</div>
     <div class="nav-item" data-tab="stats" onclick="switchTab('stats',this)">Stats</div>
@@ -112,7 +115,6 @@
   <div class="content">
     <div id="tab-dashboard"></div>
     <div id="tab-live" style="display:none"></div>
-    <div id="tab-game" style="display:none"></div>
     <div id="tab-history" style="display:none"></div>
     <div id="tab-profile" style="display:none"></div>
     <div id="tab-stats" style="display:none"></div>
