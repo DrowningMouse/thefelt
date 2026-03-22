@@ -36,30 +36,37 @@ let FB = {};
   try {
     const mod = await import("./firebase.js");
     FB = mod;
-    // Start watching for a live game as soon as Firebase loads
-    liveUnsubscribe = FB.fbWatchLiveGame(onLiveGameUpdate);
   } catch (e) {
     console.warn("Firebase not available:", e);
   }
 })();
 
-// ── PERSISTENCE (localStorage — works on any static host) ──
-function loadData() {
+// ── PERSISTENCE — Firebase (shared across all devices) ──
+async function loadData() {
   try {
-    const raw = localStorage.getItem("thefelt_data");
-    if (raw) allData = JSON.parse(raw);
-    else allData = { users: {}, games: [] };
+    if (FB.fbGetAllData) {
+      const data = await FB.fbGetAllData();
+      allData = {
+        users: data.users || {},
+        games: Array.isArray(data.games) ? data.games : Object.values(data.games || {}),
+        quotes: data.quotes || null
+      };
+    } else {
+      // Firebase not yet loaded — fall back to localStorage temporarily
+      const raw = localStorage.getItem("thefelt_data");
+      if (raw) allData = JSON.parse(raw);
+      else allData = { users: {}, games: [] };
+    }
   } catch (e) {
-    allData = { users: {}, games: [] };
+    const raw = localStorage.getItem("thefelt_data");
+    if (raw) { try { allData = JSON.parse(raw); } catch(e2) { allData = { users: {}, games: [] }; } }
+    else allData = { users: {}, games: [] };
   }
 }
 
 function saveData() {
-  try {
-    localStorage.setItem("thefelt_data", JSON.stringify(allData));
-  } catch (e) {
-    showToast("Storage error — data may not be saved");
-  }
+  // Also keep a local backup
+  try { localStorage.setItem("thefelt_data", JSON.stringify(allData)); } catch(e) {}
 }
 
 // ── UTILS ──────────────────────────────────────
@@ -111,12 +118,16 @@ function switchAuthTab(tab) {
     tab === "login" ? "Sign in with your email and password" : "Get the club password from your host";
 }
 
-function doLogin() {
+async function doLogin() {
   const email = document.getElementById("login-email").value.trim().toLowerCase();
   const pass = document.getElementById("login-pass").value;
   const err = document.getElementById("login-err");
   err.style.display = "none";
-  loadData();
+  document.getElementById("login-btn").textContent = "...";
+  document.getElementById("login-btn").disabled = true;
+  await loadData();
+  document.getElementById("login-btn").textContent = "Deal Me In";
+  document.getElementById("login-btn").disabled = false;
   const user = Object.values(allData.users).find(u => u.email === email);
   if (!user || user.password !== btoa(pass)) {
     err.textContent = "Invalid email or password.";
@@ -124,11 +135,11 @@ function doLogin() {
     return;
   }
   currentUser = user;
-  sessionStorage.setItem("thefelt_user", user.id);
+  localStorage.setItem("thefelt_user", user.id);
   enterApp();
 }
 
-function doSignup() {
+async function doSignup() {
   const sitePass = document.getElementById("signup-site-pass").value;
   const email = document.getElementById("signup-email").value.trim().toLowerCase();
   const realname = document.getElementById("signup-realname").value.trim();
@@ -150,23 +161,39 @@ function doSignup() {
     err.style.display = "block"; return;
   }
 
-  loadData();
+  document.getElementById("signup-btn").textContent = "...";
+  document.getElementById("signup-btn").disabled = true;
+  await loadData();
 
   if (Object.values(allData.users).find(u => u.email === email)) {
     err.textContent = "Email already registered.";
-    err.style.display = "block"; return;
+    err.style.display = "block";
+    document.getElementById("signup-btn").textContent = "Claim My Seat";
+    document.getElementById("signup-btn").disabled = false;
+    return;
   }
   if (Object.values(allData.users).find(u => u.username.toLowerCase() === username.toLowerCase())) {
     err.textContent = "That table name is taken.";
-    err.style.display = "block"; return;
+    err.style.display = "block";
+    document.getElementById("signup-btn").textContent = "Claim My Seat";
+    document.getElementById("signup-btn").disabled = false;
+    return;
   }
 
   const id = "u_" + Date.now();
   const user = { id, email, realname, username, password: btoa(pass) };
   allData.users[id] = user;
-  saveData();
+
+  // Save to Firebase
+  try {
+    if (FB.fbSaveUser) await FB.fbSaveUser(user);
+    else saveData();
+  } catch(e) { saveData(); }
+
   currentUser = user;
-  sessionStorage.setItem("thefelt_user", id);
+  localStorage.setItem("thefelt_user", id);
+  document.getElementById("signup-btn").textContent = "Claim My Seat";
+  document.getElementById("signup-btn").disabled = false;
   enterApp();
 }
 
@@ -211,17 +238,18 @@ function doResetStep() {
   doResetPassword();
 }
 
-function doResetPassword() {
+async function doResetPassword() {
   const err = document.getElementById("reset-err");
   err.style.display = "none";
   const newPass = document.getElementById("reset-newpass").value;
   const confirm = document.getElementById("reset-confirmpass").value;
   if (!newPass || newPass.length < 6) { err.textContent = "Password must be at least 6 characters."; err.style.display = "block"; return; }
   if (newPass !== confirm) { err.textContent = "Passwords don't match."; err.style.display = "block"; return; }
-  loadData();
+  await loadData();
   if (!allData.users[resetTargetUser.id]) { err.textContent = "Account not found."; err.style.display = "block"; return; }
   allData.users[resetTargetUser.id].password = btoa(newPass);
   saveData();
+  try { if (FB.fbSaveUser) await FB.fbSaveUser(allData.users[resetTargetUser.id]); } catch(e) {}
   showToast("Password updated — please sign in");
   showResetForm(false);
   resetTargetUser = null;
@@ -229,7 +257,7 @@ function doResetPassword() {
 
 function logout() {
   currentUser = null;
-  sessionStorage.removeItem("thefelt_user");
+  localStorage.removeItem("thefelt_user");
   document.getElementById("landing").classList.add("active");
   document.getElementById("app").classList.remove("active");
 }
@@ -608,14 +636,19 @@ function saveGame() {
 
   loadData();
   if (!allData.games) allData.games = [];
-  allData.games.push({
+  const newGame = {
     id: "g_" + Date.now(),
     date: activeGame.date,
     name: activeGame.name || "",
     entries,
     settlement: calcSettlement(entries)
-  });
+  };
+  allData.games.push(newGame);
   saveData();
+
+  // Write to Firebase
+  try { if (FB.fbSaveGame) await FB.fbSaveGame(newGame); } catch(e) {}
+
   activeGame = { date: new Date().toISOString().split("T")[0], name: "", entries: [] };
   showToast("Game saved!");
   const nav = document.querySelectorAll(".nav-item");
@@ -724,12 +757,13 @@ function showGameDetail(gid) {
 
 function closeDetailModal() { document.getElementById("detail-modal").classList.remove("open"); }
 
-function deleteGame(gid) {
+async function deleteGame(gid) {
   if (!isAdmin()) { showToast("Admin access required"); return; }
   if (!confirm("Delete this game? This cannot be undone.")) return;
-  loadData();
+  await loadData();
   allData.games = allData.games.filter(g => g.id !== gid);
   saveData();
+  try { if (FB.fbDeleteGame) await FB.fbDeleteGame(gid); } catch(e) {}
   closeDetailModal();
   showToast("Game deleted");
   renderHistory();
@@ -861,9 +895,9 @@ function renderAdmin() {
   el.innerHTML = html;
 }
 
-function removePlayer(uid) {
+async function removePlayer(uid) {
   if (!isAdmin()) return;
-  loadData();
+  await loadData();
   const u = allData.users[uid];
   if (!u) return;
   const gamesPlayed = (allData.games || []).filter(g => g.entries.find(e => e.userId === uid)).length;
@@ -871,6 +905,7 @@ function removePlayer(uid) {
   if (!confirm(msg)) return;
   delete allData.users[uid];
   saveData();
+  try { if (FB.fbDeleteUser) await FB.fbDeleteUser(uid); } catch(e) {}
   showToast(`${u.username} removed`);
   renderAdmin();
 }
@@ -1309,18 +1344,32 @@ async function cancelLiveGame() {
 }
 
 // ── INIT ───────────────────────────────────────
-(function init() {
-  loadData();
+(async function init() {
+  // Load all data from Firebase first
+  await loadData();
+
   try {
-    const uid = sessionStorage.getItem("thefelt_user");
+    const uid = localStorage.getItem("thefelt_user");
     if (uid && allData.users[uid]) {
       currentUser = allData.users[uid];
       enterApp();
     }
   } catch (e) {}
 
-  // Enter key on cashout modal
-  document.getElementById("cashout-amount").addEventListener("keydown", e => {
-    if (e.key === "Enter") confirmCashout();
-  });
+  // Enter key on live cashout modal
+  const liveCashoutInput = document.getElementById("live-cashout-amount");
+  if (liveCashoutInput) {
+    liveCashoutInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") confirmLiveCashout();
+    });
+  }
+  const rebuyInput = document.getElementById("rebuy-amount");
+  if (rebuyInput) {
+    rebuyInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") confirmRebuy();
+    });
+  }
+
+  // Start watching for live game
+  liveUnsubscribe = FB.fbWatchLiveGame && FB.fbWatchLiveGame(onLiveGameUpdate);
 })();

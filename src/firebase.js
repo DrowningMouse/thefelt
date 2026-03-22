@@ -1,10 +1,10 @@
 // ═══════════════════════════════════════════════
 //  THE FELT — Firebase Realtime Database
-//  Used exclusively for the Live Game feature
+//  Handles: users, games, and live game sync
 // ═══════════════════════════════════════════════
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getDatabase, ref, set, onValue, update, remove, get }
+import { getDatabase, ref, set, get, onValue, update, remove }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const firebaseConfig = {
@@ -20,53 +20,75 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// ── LIVE GAME API ──────────────────────────────
+// ── USERS & GAMES (shared across all devices) ──
 
-// Start a new live game — overwrites any existing one
+export async function fbGetAllData() {
+  const snapshot = await get(ref(db, "/"));
+  if (!snapshot.exists()) return { users: {}, games: [] };
+  const val = snapshot.val() || {};
+  return {
+    users: val.users || {},
+    games: val.games ? Object.values(val.games) : [],
+    quotes: val.quotes || null
+  };
+}
+
+export function fbSaveUser(user) {
+  return set(ref(db, `users/${user.id}`), user);
+}
+
+export function fbDeleteUser(uid) {
+  return remove(ref(db, `users/${uid}`));
+}
+
+export function fbUpdateUser(uid, data) {
+  return update(ref(db, `users/${uid}`), data);
+}
+
+export function fbSaveGame(game) {
+  return set(ref(db, `games/${game.id}`), game);
+}
+
+export function fbDeleteGame(gid) {
+  return remove(ref(db, `games/${gid}`));
+}
+
+export function fbSaveQuotes(quotes) {
+  return set(ref(db, "quotes"), quotes);
+}
+
+// ── LIVE GAME (real-time) ──────────────────────
+
 export function fbStartLiveGame(gameData) {
   return set(ref(db, "liveGame"), gameData);
 }
 
-// Listen to live game changes in real time
 export function fbWatchLiveGame(callback) {
-  const gameRef = ref(db, "liveGame");
-  return onValue(gameRef, snapshot => {
+  return onValue(ref(db, "liveGame"), snapshot => {
     callback(snapshot.exists() ? snapshot.val() : null);
   });
 }
 
-// Add a buy-in to a player (last-write-wins)
-export function fbAddBuyIn(userId, newTotal) {
-  return update(ref(db, `liveGame/players/${userId}`), { totalBuyIn: newTotal });
+export async function fbAddBuyIn(userId, newTotal, buyIns) {
+  return update(ref(db, `liveGame/players/${userId}`), { totalBuyIn: newTotal, buyIns });
 }
 
-// Mark a player as cashed out
 export function fbCashOutPlayer(userId, cashOut) {
-  return update(ref(db, `liveGame/players/${userId}`), {
-    cashOut,
-    cashedOut: true
-  });
+  return update(ref(db, `liveGame/players/${userId}`), { cashOut, cashedOut: true });
 }
 
-// Undo a cash-out
 export function fbUndoCashOut(userId) {
-  return update(ref(db, `liveGame/players/${userId}`), {
-    cashOut: 0,
-    cashedOut: false
-  });
+  return update(ref(db, `liveGame/players/${userId}`), { cashOut: 0, cashedOut: false });
 }
 
-// Add a player to the live game mid-game
 export function fbAddPlayerToLiveGame(userId, playerData) {
   return set(ref(db, `liveGame/players/${userId}`), playerData);
 }
 
-// End the live game — remove from Firebase after saving
 export function fbEndLiveGame() {
   return remove(ref(db, "liveGame"));
 }
 
-// One-time read to check if a live game exists
 export async function fbGetLiveGame() {
   const snapshot = await get(ref(db, "liveGame"));
   return snapshot.exists() ? snapshot.val() : null;
