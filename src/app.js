@@ -30,84 +30,120 @@ let liveUnsubscribe = null;   // Firebase listener cleanup fn
 let rebuyTargetId = null;     // userId for re-buy modal
 let liveCashoutTargetId = null; // userId for live cashout modal
 
-// Firebase API — loaded before anything else runs
-let FB = {};
+// ── FIREBASE SETUP (compat SDK loaded via CDN in index.html) ──
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAdo99TgIOc01oN67crUS1ECV7YCcMktcs",
+  authDomain: "thefelt-136e9.firebaseapp.com",
+  databaseURL: "https://thefelt-136e9-default-rtdb.firebaseio.com",
+  projectId: "thefelt-136e9",
+  storageBucket: "thefelt-136e9.firebasestorage.app",
+  messagingSenderId: "693850023801",
+  appId: "1:693850023801:web:aef85437fa7705aad871a8"
+};
+
+let db = null; // Firebase database reference
+
+function initFirebase() {
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    db = firebase.database();
+    return true;
+  } catch(e) {
+    console.warn("Firebase init failed:", e);
+    return false;
+  }
+}
+
+// ── PERSISTENCE ────────────────────────────────
+async function loadData() {
+  if (!db) { loadFromLocal(); return; }
+  try {
+    const snap = await db.ref("/").get();
+    if (snap.exists()) {
+      const val = snap.val() || {};
+      allData = {
+        users: val.users || {},
+        games: val.games ? Object.values(val.games) : [],
+        quotes: val.quotes || null
+      };
+    } else {
+      allData = { users: {}, games: [] };
+    }
+    localStorage.setItem("thefelt_data", JSON.stringify(allData));
+  } catch(e) {
+    console.warn("Firebase load failed, using local:", e);
+    loadFromLocal();
+  }
+}
+
+function loadFromLocal() {
+  try {
+    const raw = localStorage.getItem("thefelt_data");
+    allData = raw ? JSON.parse(raw) : { users: {}, games: [] };
+  } catch(e) {
+    allData = { users: {}, games: [] };
+  }
+}
+
+function saveData() {
+  try { localStorage.setItem("thefelt_data", JSON.stringify(allData)); } catch(e) {}
+}
+
+async function fbSet(path, value) {
+  if (!db) return;
+  await db.ref(path).set(value);
+}
+
+async function fbUpdate(path, value) {
+  if (!db) return;
+  await db.ref(path).update(value);
+}
+
+async function fbRemove(path) {
+  if (!db) return;
+  await db.ref(path).remove();
+}
+
+function fbWatch(path, callback) {
+  if (!db) return () => {};
+  const ref = db.ref(path);
+  ref.on("value", snap => callback(snap.exists() ? snap.val() : null));
+  return () => ref.off("value");
+}
 
 // ── INIT ───────────────────────────────────────
 (async function init() {
-  // 1. Load Firebase first so FB is populated before any data calls
-  try {
-    FB = await import("./firebase.js");
-  } catch (e) {
-    console.warn("Firebase unavailable — falling back to localStorage:", e);
-  }
+  // 1. Initialise Firebase
+  initFirebase();
 
-  // 2. Start watching live game
-  if (FB.fbWatchLiveGame) {
-    liveUnsubscribe = FB.fbWatchLiveGame(onLiveGameUpdate);
-  }
+  // 2. Watch for live game updates
+  fbWatch("liveGame", onLiveGameUpdate);
 
-  // 3. Load all shared data
+  // 3. Load all data
   await loadData();
 
-  // 4. Seed demo data on first launch if DB is empty
+  // 4. Seed on first launch if empty
   await maybeSeedData();
 
-  // 5. Restore session if user was previously logged in
+  // 5. Restore session
   try {
     const uid = localStorage.getItem("thefelt_user");
     if (uid && allData.users[uid]) {
       currentUser = allData.users[uid];
       enterApp();
     }
-  } catch (e) {}
+  } catch(e) {}
 
-  // 5. Wire up keyboard shortcuts
+  // 6. Keyboard shortcuts
   const liveCashoutInput = document.getElementById("live-cashout-amount");
-  if (liveCashoutInput) {
-    liveCashoutInput.addEventListener("keydown", e => {
-      if (e.key === "Enter") confirmLiveCashout();
-    });
-  }
+  if (liveCashoutInput) liveCashoutInput.addEventListener("keydown", e => { if (e.key === "Enter") confirmLiveCashout(); });
   const rebuyInput = document.getElementById("rebuy-amount");
-  if (rebuyInput) {
-    rebuyInput.addEventListener("keydown", e => {
-      if (e.key === "Enter") confirmRebuy();
-    });
-  }
+  if (rebuyInput) rebuyInput.addEventListener("keydown", e => { if (e.key === "Enter") confirmRebuy(); });
 })();
-
-// ── PERSISTENCE — Firebase (shared across all devices) ──
-async function loadData() {
-  try {
-    if (FB.fbGetAllData) {
-      const data = await FB.fbGetAllData();
-      allData = {
-        users: data.users || {},
-        games: Array.isArray(data.games) ? data.games : Object.values(data.games || {}),
-        quotes: data.quotes || null
-      };
-    } else {
-      // Firebase not yet loaded — fall back to localStorage temporarily
-      const raw = localStorage.getItem("thefelt_data");
-      if (raw) allData = JSON.parse(raw);
-      else allData = { users: {}, games: [] };
-    }
-  } catch (e) {
-    const raw = localStorage.getItem("thefelt_data");
-    if (raw) { try { allData = JSON.parse(raw); } catch(e2) { allData = { users: {}, games: [] }; } }
-    else allData = { users: {}, games: [] };
-  }
-}
-
-function saveData() {
-  // Also keep a local backup
-  try { localStorage.setItem("thefelt_data", JSON.stringify(allData)); } catch(e) {}
-}
 
 // ── SEED DATA (runs once on first load if DB is empty) ──
 async function maybeSeedData() {
-  if (!FB.fbSaveUser || !FB.fbSaveGame) return;
+  if (!db) return;
   const hasUsers = Object.keys(allData.users || {}).length > 0;
   const hasGames = (allData.games || []).length > 0;
   if (hasUsers && hasGames) return; // already seeded
@@ -171,10 +207,10 @@ async function maybeSeedData() {
 
   // Write to Firebase
   for (const u of users) {
-    if (!allData.users[u.id]) await FB.fbSaveUser(u);
+    if (!allData.users[u.id]) await fbSet("users/" + u.id, u);
   }
   for (const g of games) {
-    await FB.fbSaveGame(g);
+    await fbSet("games/" + g.id, g);
   }
 
   // Reload so allData reflects seed
@@ -298,7 +334,7 @@ async function doSignup() {
 
   // Save to Firebase
   try {
-    if (FB.fbSaveUser) await FB.fbSaveUser(user);
+    await fbSet("users/" + user.id, user);
     else saveData();
   } catch(e) { saveData(); }
 
@@ -361,7 +397,7 @@ async function doResetPassword() {
   if (!allData.users[resetTargetUser.id]) { err.textContent = "Account not found."; err.style.display = "block"; return; }
   allData.users[resetTargetUser.id].password = btoa(newPass);
   saveData();
-  try { if (FB.fbSaveUser) await FB.fbSaveUser(allData.users[resetTargetUser.id]); } catch(e) {}
+  try { await fbSet("users/" + resetTargetUser.id, allData.users[resetTargetUser.id]); } catch(e) {}
   showToast("Password updated — please sign in");
   showResetForm(false);
   resetTargetUser = null;
@@ -759,7 +795,7 @@ function saveGame() {
   saveData();
 
   // Write to Firebase
-  try { if (FB.fbSaveGame) await FB.fbSaveGame(newGame); } catch(e) {}
+  try { await fbSet("games/" + newGame.id, newGame); } catch(e) {}
 
   activeGame = { date: new Date().toISOString().split("T")[0], name: "", entries: [] };
   showToast("Game saved!");
@@ -875,7 +911,7 @@ async function deleteGame(gid) {
   await loadData();
   allData.games = allData.games.filter(g => g.id !== gid);
   saveData();
-  try { if (FB.fbDeleteGame) await FB.fbDeleteGame(gid); } catch(e) {}
+  try { await fbRemove("games/" + gid); } catch(e) {}
   closeDetailModal();
   showToast("Game deleted");
   renderHistory();
@@ -1017,7 +1053,7 @@ async function removePlayer(uid) {
   if (!confirm(msg)) return;
   delete allData.users[uid];
   saveData();
-  try { if (FB.fbDeleteUser) await FB.fbDeleteUser(uid); } catch(e) {}
+  try { await fbRemove("users/" + uid); } catch(e) {}
   showToast(`${u.username} removed`);
   renderAdmin();
 }
@@ -1140,7 +1176,7 @@ async function startLiveGame() {
   };
 
   try {
-    await FB.fbStartLiveGame(gameData);
+    await fbSet("liveGame", gameData);
     showToast("Live game started!");
     // Switch to live tab
     const navItems = document.querySelectorAll(".nav-item");
@@ -1314,13 +1350,8 @@ async function confirmRebuy() {
   const newTotal = current + amt;
 
   try {
-    // Update total and append to buy-in history
     const buyIns = [...(liveGame?.players?.[rebuyTargetId]?.buyIns || []), { amount: amt, at: Date.now() }];
-    await FB.fbAddBuyIn(rebuyTargetId, newTotal);
-    // Also update buyIns array
-    const { getDatabase, ref, update } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
-    const db = getDatabase();
-    await update(ref(db, `liveGame/players/${rebuyTargetId}`), { totalBuyIn: newTotal, buyIns });
+    await fbUpdate("liveGame/players/" + rebuyTargetId, { totalBuyIn: newTotal, buyIns });
     showToast(`+$${amt} buy-in added`);
     closeRebuyModal();
   } catch (e) {
@@ -1351,7 +1382,7 @@ async function confirmLiveCashout() {
   err.style.display = "none";
   if (isNaN(amt) || amt < 0) { err.textContent = "Enter a valid amount."; err.style.display = "block"; return; }
   try {
-    await FB.fbCashOutPlayer(liveCashoutTargetId, amt);
+    await fbUpdate("liveGame/players/" + liveCashoutTargetId, { cashOut: amt, cashedOut: true });
     showToast("Cashed out ✓");
     closeLiveCashout();
   } catch (e) {
@@ -1361,7 +1392,7 @@ async function confirmLiveCashout() {
 
 async function liveUndoCashout(userId) {
   try {
-    await FB.fbUndoCashOut(userId);
+    await fbUpdate("liveGame/players/" + userId, { cashOut: 0, cashedOut: false });
     showToast("Cash-out undone");
   } catch (e) {
     showToast("Error — check connection");
@@ -1395,7 +1426,7 @@ async function addPlayerToLiveGame(userId) {
   const u = allData.users[userId];
   closePlayerModal();
   try {
-    await FB.fbAddPlayerToLiveGame(userId, {
+    await fbSet("liveGame/players/" + userId, {
       userId,
       username: u.username,
       totalBuyIn: 0,
@@ -1440,7 +1471,7 @@ async function endLiveGame() {
   });
   saveData();
 
-  await FB.fbEndLiveGame();
+  await fbRemove("liveGame");
   showToast("Game saved!");
   const nav = document.querySelectorAll(".nav-item");
   nav.forEach(n => n.classList.remove("active"));
@@ -1450,7 +1481,7 @@ async function endLiveGame() {
 
 async function cancelLiveGame() {
   if (!confirm("Cancel this live game? All buy-in data will be lost.")) return;
-  await FB.fbEndLiveGame();
+  await fbRemove("liveGame");
   showToast("Game cancelled");
   renderLiveTab();
 }

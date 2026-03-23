@@ -105,7 +105,7 @@
   <div class="nav-bar">
     <div class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard',this)">Dashboard</div>
     <div class="nav-item" data-tab="live" onclick="switchTab('live',this)" id="live-tab">
-      Live Game <span id="live-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:#6ecf8a;display:none;margin-left:3px;animation:pulse 1.5s infinite;vertical-align:middle"></span>
+      Live Game <span id="live-dot" style="width:6px;height:6px;border-radius:50%;background:#6ecf8a;display:none;margin-left:3px;animation:pulse 1.5s infinite;vertical-align:middle;display:inline-block;opacity:0"></span>
     </div>
     <div class="nav-item" data-tab="history" onclick="switchTab('history',this)">History</div>
     <div class="nav-item" data-tab="profile" onclick="switchTab('profile',this)">Me</div>
@@ -136,22 +136,7 @@
   <div class="modal-box" id="detail-modal-body"></div>
 </div>
 
-<!-- Cash Out Modal -->
-<div class="modal-overlay" id="cashout-modal" onclick="if(event.target===this)closeCashoutModal()">
-  <div class="modal-box" style="max-width:320px">
-    <div class="modal-title" id="cashout-title">Cash Out</div>
-    <div style="margin-bottom:1rem;font-size:13px;color:var(--text-muted)">Enter final chip count for this player.</div>
-    <span class="g-label">Cash-out amount ($)</span>
-    <input class="g-input" type="number" min="0" id="cashout-amount" placeholder="0.00">
-    <div class="error-msg" id="cashout-err"></div>
-    <div class="modal-footer">
-      <button class="btn-sm" onclick="closeCashoutModal()">Cancel</button>
-      <button class="btn-sm primary" onclick="confirmCashout()">Confirm</button>
-    </div>
-  </div>
-</div>
-
-<!-- Re-buy Modal (Live Game) -->
+<!-- Re-buy Modal -->
 <div class="modal-overlay" id="rebuy-modal" onclick="if(event.target===this)closeRebuyModal()">
   <div class="modal-box" style="max-width:320px">
     <div class="modal-title" id="rebuy-title">Add Buy-in</div>
@@ -183,6 +168,11 @@
 
 <div class="toast" id="toast"></div>
 
-<script type="module" src="src/app.js"></script>
+<!-- Firebase CDN (loaded before app.js) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<!-- App (plain script, all functions global) -->
+<script src="src/app.js"></script>
 </body>
 </html>
