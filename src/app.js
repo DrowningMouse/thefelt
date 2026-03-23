@@ -30,14 +30,50 @@ let liveUnsubscribe = null;   // Firebase listener cleanup fn
 let rebuyTargetId = null;     // userId for re-buy modal
 let liveCashoutTargetId = null; // userId for live cashout modal
 
-// Firebase API — imported async so app.js loads first
+// Firebase API — loaded before anything else runs
 let FB = {};
-(async () => {
+
+// ── INIT ───────────────────────────────────────
+(async function init() {
+  // 1. Load Firebase first so FB is populated before any data calls
   try {
-    const mod = await import("./firebase.js");
-    FB = mod;
+    FB = await import("./firebase.js");
   } catch (e) {
-    console.warn("Firebase not available:", e);
+    console.warn("Firebase unavailable — falling back to localStorage:", e);
+  }
+
+  // 2. Start watching live game
+  if (FB.fbWatchLiveGame) {
+    liveUnsubscribe = FB.fbWatchLiveGame(onLiveGameUpdate);
+  }
+
+  // 3. Load all shared data
+  await loadData();
+
+  // 4. Seed demo data on first launch if DB is empty
+  await maybeSeedData();
+
+  // 5. Restore session if user was previously logged in
+  try {
+    const uid = localStorage.getItem("thefelt_user");
+    if (uid && allData.users[uid]) {
+      currentUser = allData.users[uid];
+      enterApp();
+    }
+  } catch (e) {}
+
+  // 5. Wire up keyboard shortcuts
+  const liveCashoutInput = document.getElementById("live-cashout-amount");
+  if (liveCashoutInput) {
+    liveCashoutInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") confirmLiveCashout();
+    });
+  }
+  const rebuyInput = document.getElementById("rebuy-amount");
+  if (rebuyInput) {
+    rebuyInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") confirmRebuy();
+    });
   }
 })();
 
@@ -67,6 +103,82 @@ async function loadData() {
 function saveData() {
   // Also keep a local backup
   try { localStorage.setItem("thefelt_data", JSON.stringify(allData)); } catch(e) {}
+}
+
+// ── SEED DATA (runs once on first load if DB is empty) ──
+async function maybeSeedData() {
+  if (!FB.fbSaveUser || !FB.fbSaveGame) return;
+  const hasUsers = Object.keys(allData.users || {}).length > 0;
+  const hasGames = (allData.games || []).length > 0;
+  if (hasUsers && hasGames) return; // already seeded
+
+  const users = [
+    { id:"seed_u1", email:"dylan.r.minto@gmail.com", realname:"Dylan Minto",      username:"Dylan",      password:btoa("poker123") },
+    { id:"seed_u2", email:"shortstack@thefelt.app",  realname:"James O'Sullivan",  username:"Shortstack", password:btoa("poker123") },
+    { id:"seed_u3", email:"riverrat@thefelt.app",    realname:"Mike Brennan",      username:"RiverRat",   password:btoa("poker123") },
+    { id:"seed_u4", email:"acehigh@thefelt.app",     realname:"Connor Walsh",      username:"AceHigh",    password:btoa("poker123") },
+    { id:"seed_u5", email:"bluffmaster@thefelt.app", realname:"Sarah Kelly",       username:"BluffMaster",password:btoa("poker123") },
+  ];
+
+  function calcSeed(entries) {
+    const bals = entries.map(e => ({ u: e.userId, v: e.cashOut - e.buyIn }));
+    const d = bals.filter(x => x.v < -0.005).map(x => ({...x}));
+    const c = bals.filter(x => x.v > 0.005).map(x => ({...x}));
+    d.sort((a,b) => a.v - b.v); c.sort((a,b) => b.v - a.v);
+    const t = []; let i = 0, j = 0;
+    while (i < d.length && j < c.length) {
+      const amt = Math.min(-d[i].v, c[j].v);
+      if (amt > 0.005) t.push({ from: d[i].u, to: c[j].u, amount: Math.round(amt * 100) / 100 });
+      d[i].v += amt; c[j].v -= amt;
+      if (Math.abs(d[i].v) < 0.005) i++;
+      if (Math.abs(c[j].v) < 0.005) j++;
+    }
+    return t;
+  }
+
+  const games = [
+    {
+      id:"seed_g1", date:"2026-02-14", name:"Valentine's Day Massacre",
+      entries:[
+        {userId:"seed_u1",buyIn:100,cashOut:220},
+        {userId:"seed_u2",buyIn:100,cashOut:30},
+        {userId:"seed_u3",buyIn:100,cashOut:175},
+        {userId:"seed_u4",buyIn:100,cashOut:50},
+        {userId:"seed_u5",buyIn:100,cashOut:25},
+      ]
+    },
+    {
+      id:"seed_g2", date:"2026-03-07", name:"Friday Night Game",
+      entries:[
+        {userId:"seed_u1",buyIn:200,cashOut:350},
+        {userId:"seed_u2",buyIn:100,cashOut:0},
+        {userId:"seed_u3",buyIn:100,cashOut:75},
+        {userId:"seed_u4",buyIn:100,cashOut:225},
+        {userId:"seed_u5",buyIn:100,cashOut:0},
+      ]
+    },
+    {
+      id:"seed_g3", date:"2026-03-14", name:"Pi Day Poker",
+      entries:[
+        {userId:"seed_u1",buyIn:100,cashOut:50},
+        {userId:"seed_u2",buyIn:100,cashOut:275},
+        {userId:"seed_u3",buyIn:100,cashOut:150},
+        {userId:"seed_u4",buyIn:100,cashOut:0},
+        {userId:"seed_u5",buyIn:100,cashOut:25},
+      ]
+    },
+  ].map(g => ({ ...g, settlement: calcSeed(g.entries) }));
+
+  // Write to Firebase
+  for (const u of users) {
+    if (!allData.users[u.id]) await FB.fbSaveUser(u);
+  }
+  for (const g of games) {
+    await FB.fbSaveGame(g);
+  }
+
+  // Reload so allData reflects seed
+  await loadData();
 }
 
 // ── UTILS ──────────────────────────────────────
@@ -1343,33 +1455,4 @@ async function cancelLiveGame() {
   renderLiveTab();
 }
 
-// ── INIT ───────────────────────────────────────
-(async function init() {
-  // Load all data from Firebase first
-  await loadData();
-
-  try {
-    const uid = localStorage.getItem("thefelt_user");
-    if (uid && allData.users[uid]) {
-      currentUser = allData.users[uid];
-      enterApp();
-    }
-  } catch (e) {}
-
-  // Enter key on live cashout modal
-  const liveCashoutInput = document.getElementById("live-cashout-amount");
-  if (liveCashoutInput) {
-    liveCashoutInput.addEventListener("keydown", e => {
-      if (e.key === "Enter") confirmLiveCashout();
-    });
-  }
-  const rebuyInput = document.getElementById("rebuy-amount");
-  if (rebuyInput) {
-    rebuyInput.addEventListener("keydown", e => {
-      if (e.key === "Enter") confirmRebuy();
-    });
-  }
-
-  // Start watching for live game
-  liveUnsubscribe = FB.fbWatchLiveGame && FB.fbWatchLiveGame(onLiveGameUpdate);
-})();
+// ── END ──────────────────────────────────────
