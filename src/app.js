@@ -55,8 +55,13 @@ function initFirebase() {
 }
 
 // ── PERSISTENCE ────────────────────────────────
-async function loadData() {
-  if (!db) { loadFromLocal(); return; }
+function loadData() {
+  // Always load from local cache instantly (sync)
+  loadFromLocal();
+}
+
+async function loadDataFromFirebase() {
+  if (!db) return;
   try {
     const snap = await db.ref("/").get();
     if (snap.exists()) {
@@ -66,12 +71,12 @@ async function loadData() {
         games: val.games ? Object.values(val.games) : [],
         quotes: val.quotes || null
       };
+      localStorage.setItem("thefelt_data", JSON.stringify(allData));
     } else {
       allData = { users: {}, games: [] };
     }
-    localStorage.setItem("thefelt_data", JSON.stringify(allData));
   } catch(e) {
-    console.warn("Firebase load failed, using local:", e);
+    console.warn("Firebase load failed, using local cache:", e);
     loadFromLocal();
   }
 }
@@ -119,8 +124,8 @@ function fbWatch(path, callback) {
   // 2. Watch for live game updates
   fbWatch("liveGame", onLiveGameUpdate);
 
-  // 3. Load all data
-  await loadData();
+  // 3. Load all data from Firebase (awaited on startup)
+  await loadDataFromFirebase();
 
   // 4. Seed on first launch if empty
   await maybeSeedData();
@@ -214,7 +219,7 @@ async function maybeSeedData() {
   }
 
   // Reload so allData reflects seed
-  await loadData();
+  await loadDataFromFirebase();
 }
 
 // ── UTILS ──────────────────────────────────────
@@ -273,7 +278,7 @@ async function doLogin() {
   err.style.display = "none";
   document.getElementById("login-btn").textContent = "...";
   document.getElementById("login-btn").disabled = true;
-  await loadData();
+  await loadDataFromFirebase();
   document.getElementById("login-btn").textContent = "Deal Me In";
   document.getElementById("login-btn").disabled = false;
   const user = Object.values(allData.users).find(u => u.email === email);
@@ -311,7 +316,7 @@ async function doSignup() {
 
   document.getElementById("signup-btn").textContent = "...";
   document.getElementById("signup-btn").disabled = true;
-  await loadData();
+  await loadDataFromFirebase();
 
   if (Object.values(allData.users).find(u => u.email === email)) {
     err.textContent = "Email already registered.";
@@ -1459,19 +1464,32 @@ async function endLiveGame() {
     return;
   }
 
-  loadData();
-  if (!allData.games) allData.games = [];
-  allData.games.push({
+  const newGame = {
     id: liveGame.id,
     date: liveGame.date,
     name: liveGame.name || "",
     entries,
     settlement: calcSettlement(entries)
-  });
-  saveData();
+  };
 
-  await fbRemove("liveGame");
-  showToast("Game saved!");
+  try {
+    // Write game to Firebase first
+    await fbSet("games/" + newGame.id, newGame);
+    // Remove the live game from Firebase
+    await fbRemove("liveGame");
+    // Reload from Firebase so allData is fresh
+    await loadDataFromFirebase();
+    showToast("Game saved!");
+  } catch(e) {
+    console.warn("Firebase write failed, saving locally:", e);
+    // Fallback to local
+    if (!allData.games) allData.games = [];
+    allData.games.push(newGame);
+    saveData();
+    await fbRemove("liveGame");
+    showToast("Game saved!");
+  }
+
   const nav = document.querySelectorAll(".nav-item");
   nav.forEach(n => n.classList.remove("active"));
   nav[0].classList.add("active");
