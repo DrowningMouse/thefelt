@@ -335,7 +335,6 @@ async function doSignup() {
   // Save to Firebase
   try {
     await fbSet("users/" + user.id, user);
-    else saveData();
   } catch(e) { saveData(); }
 
   currentUser = user;
@@ -765,7 +764,7 @@ function calcSettlement(entries) {
   return txns;
 }
 
-function saveGame() {
+async function saveGame() {
   if (!activeGame.entries.length) { showToast("No players in this game"); return; }
 
   const notCashedOut = activeGame.entries.filter(e => !e.cashedOut).map(e => allData.users[e.userId]?.username);
