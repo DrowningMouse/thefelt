@@ -55,13 +55,18 @@ function initFirebase() {
 }
 
 // ── PERSISTENCE ────────────────────────────────
+// loadData() — keeps backwards compat for all the call sites
+// Just ensures allData is populated; real data comes from Firebase on init/login
 function loadData() {
-  // Always load from local cache instantly (sync)
-  loadFromLocal();
+  // allData is already populated from Firebase on startup and after every write
+  // Only fall back to localStorage if allData is genuinely empty
+  if (!allData || (!Object.keys(allData.users || {}).length && !(allData.games || []).length)) {
+    loadFromLocal();
+  }
 }
 
 async function loadDataFromFirebase() {
-  if (!db) return;
+  if (!db) { loadFromLocal(); return; }
   try {
     const snap = await db.ref("/").get();
     if (snap.exists()) {
@@ -71,10 +76,11 @@ async function loadDataFromFirebase() {
         games: val.games ? Object.values(val.games) : [],
         quotes: val.quotes || null
       };
-      localStorage.setItem("thefelt_data", JSON.stringify(allData));
     } else {
       allData = { users: {}, games: [] };
     }
+    // Keep localStorage in sync
+    localStorage.setItem("thefelt_data", JSON.stringify(allData));
   } catch(e) {
     console.warn("Firebase load failed, using local cache:", e);
     loadFromLocal();
@@ -154,7 +160,7 @@ async function maybeSeedData() {
   if (hasUsers && hasGames) return; // already seeded
 
   const users = [
-    { id:"seed_u1", email:"dylan.r.minto@gmail.com", realname:"Dylan Minto",      username:"Dylan",      password:btoa("poker123") },
+    { id:"seed_u1", email:"dylan.r.minto@gmail.com", realname:"Dylan",      username:"Limpy",      password:btoa("poker123") },
     { id:"seed_u2", email:"shortstack@thefelt.app",  realname:"James O'Sullivan",  username:"Shortstack", password:btoa("poker123") },
     { id:"seed_u3", email:"riverrat@thefelt.app",    realname:"Mike Brennan",      username:"RiverRat",   password:btoa("poker123") },
     { id:"seed_u4", email:"acehigh@thefelt.app",     realname:"Connor Walsh",      username:"AceHigh",    password:btoa("poker123") },
@@ -1195,7 +1201,7 @@ function renderLiveTracker(el) {
   loadData();
   const g = liveGame;
   const players = g.players || {};
-  const isStarter = g.startedBy === currentUser.id;
+  const isStarter = g.startedBy === currentUser.id || isAdmin();
   const totalPot = Object.values(players).reduce((s, p) => s + (p.totalBuyIn || 0), 0);
   const cashedOut = Object.values(players).filter(p => p.cashedOut).reduce((s, p) => s + (p.cashOut || 0), 0);
 
@@ -1446,48 +1452,55 @@ async function addPlayerToLiveGame(userId) {
 
 // ── END / CANCEL LIVE GAME ─────────────────────
 async function endLiveGame() {
-  if (!liveGame) return;
+  if (!liveGame) { showToast("No active game found"); return; }
+
   const players = liveGame.players || {};
+  if (!Object.keys(players).length) { showToast("No players in this game"); return; }
+
+  // Check all players cashed out
   const notOut = Object.values(players).filter(p => !p.cashedOut).map(p => p.username);
   if (notOut.length) { showToast(`Still at table: ${notOut.join(", ")}`); return; }
 
   const entries = Object.values(players).map(p => ({
     userId: p.userId,
-    buyIn: p.totalBuyIn || 0,
-    cashOut: p.cashOut || 0
+    buyIn: parseFloat(p.totalBuyIn) || 0,
+    cashOut: parseFloat(p.cashOut) || 0
   }));
 
-  const totalIn = entries.reduce((s, e) => s + e.buyIn, 0);
+  const totalIn  = entries.reduce((s, e) => s + e.buyIn, 0);
   const totalOut = entries.reduce((s, e) => s + e.cashOut, 0);
+
+  // Warn but don't block if amounts don't balance exactly
   if (Math.abs(totalIn - totalOut) > 1) {
-    showToast(`Buy-ins ($${totalIn.toFixed(2)}) ≠ cash-outs ($${totalOut.toFixed(2)})`);
-    return;
+    const proceed = confirm(`Heads up: buy-ins ($${totalIn.toFixed(2)}) don't equal cash-outs ($${totalOut.toFixed(2)}). Difference of $${Math.abs(totalIn-totalOut).toFixed(2)}.\n\nSave anyway?`);
+    if (!proceed) return;
   }
 
   const newGame = {
-    id: liveGame.id,
-    date: liveGame.date,
+    id: liveGame.id || ("g_" + Date.now()),
+    date: liveGame.date || new Date().toISOString().split("T")[0],
     name: liveGame.name || "",
     entries,
     settlement: calcSettlement(entries)
   };
 
+  showToast("Saving…");
+
   try {
-    // Write game to Firebase first
     await fbSet("games/" + newGame.id, newGame);
-    // Remove the live game from Firebase
     await fbRemove("liveGame");
-    // Reload from Firebase so allData is fresh
-    await loadDataFromFirebase();
-    showToast("Game saved!");
+    // Update allData immediately so dashboard renders without waiting for Firebase
+    if (!allData.games) allData.games = [];
+    allData.games.push(newGame);
+    localStorage.setItem("thefelt_data", JSON.stringify(allData));
+    showToast("Game saved! ✓");
   } catch(e) {
-    console.warn("Firebase write failed, saving locally:", e);
-    // Fallback to local
+    console.warn("Firebase save failed:", e);
     if (!allData.games) allData.games = [];
     allData.games.push(newGame);
     saveData();
-    await fbRemove("liveGame");
-    showToast("Game saved!");
+    try { await fbRemove("liveGame"); } catch(e2) {}
+    showToast("Game saved locally ✓");
   }
 
   const nav = document.querySelectorAll(".nav-item");
