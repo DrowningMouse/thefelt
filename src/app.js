@@ -490,7 +490,14 @@ function renderDashboard() {
   const el = document.getElementById("tab-dashboard");
   loadData();
   const games = allData.games || [];
-  const lastGame = games[games.length - 1];
+  // Sort by date descending, most recent first
+  const sorted = [...games].sort((a, b) => {
+    const da = a.date || ""; const db2 = b.date || "";
+    if (da > db2) return -1; if (da < db2) return 1;
+    // Same date — use id as tiebreaker (live_ + timestamp)
+    return (b.id || "").localeCompare(a.id || "");
+  });
+  const lastGame = sorted[0];
   const quote = getDailyQuote();
 
   let html = `
@@ -825,7 +832,11 @@ function clearGame() {
 function renderHistory() {
   const el = document.getElementById("tab-history");
   loadData();
-  const games = [...(allData.games || [])].reverse();
+  const games = [...(allData.games || [])].sort((a, b) => {
+    const da = a.date || ""; const db2 = b.date || "";
+    if (da > db2) return -1; if (da < db2) return 1;
+    return (b.id || "").localeCompare(a.id || "");
+  });
   let html = `<div class="section-title">Game History</div>`;
   if (!games.length) {
     html += '<div class="g-card"><div class="empty-state">No games yet.</div></div>';
