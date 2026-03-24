@@ -161,7 +161,7 @@ async function maybeSeedData() {
 
   const users = [
     { id:"seed_u1", email:"dylan.r.minto@gmail.com", realname:"Dylan",      username:"Limpy",      password:btoa("poker123") },
-    { id:"seed_u2", email:"shortstack@thefelt.app",  realname:"James O'Sullivan",  username:"Shortstack", password:btoa("poker123") },
+    { id:"seed_u2", email:"shortstack@thefelt.app",  realname:"James O'Sullivan",  username:"JacksOffSuit", password:btoa("poker123") },
     { id:"seed_u3", email:"riverrat@thefelt.app",    realname:"Mike Brennan",      username:"RiverRat",   password:btoa("poker123") },
     { id:"seed_u4", email:"acehigh@thefelt.app",     realname:"Connor Walsh",      username:"AceHigh",    password:btoa("poker123") },
     { id:"seed_u5", email:"bluffmaster@thefelt.app", realname:"Sarah Kelly",       username:"BluffMaster",password:btoa("poker123") },
