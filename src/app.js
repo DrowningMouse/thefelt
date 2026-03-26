@@ -161,7 +161,7 @@ async function maybeSeedData() {
 
   const users = [
     { id:"seed_u1", email:"dylan.r.minto@gmail.com", realname:"Dylan",      username:"Limpy",      password:btoa("poker123") },
-    { id:"seed_u2", email:"shortstack@thefelt.app",  realname:"James O'Sullivan",  username:"JacksOffSuit", password:btoa("poker123") },
+    { id:"seed_u2", email:"shortstack@thefelt.app",  realname:"James O'Sullivan",  username:"Shortstack", password:btoa("poker123") },
     { id:"seed_u3", email:"riverrat@thefelt.app",    realname:"Mike Brennan",      username:"RiverRat",   password:btoa("poker123") },
     { id:"seed_u4", email:"acehigh@thefelt.app",     realname:"Connor Walsh",      username:"AceHigh",    password:btoa("poker123") },
     { id:"seed_u5", email:"bluffmaster@thefelt.app", realname:"Sarah Kelly",       username:"BluffMaster",password:btoa("poker123") },
@@ -929,13 +929,18 @@ function closeDetailModal() { document.getElementById("detail-modal").classList.
 async function deleteGame(gid) {
   if (!isAdmin()) { showToast("Admin access required"); return; }
   if (!confirm("Delete this game? This cannot be undone.")) return;
-  await loadData();
-  allData.games = allData.games.filter(g => g.id !== gid);
-  saveData();
-  try { await fbRemove("games/" + gid); } catch(e) {}
-  closeDetailModal();
-  showToast("Game deleted");
-  renderHistory();
+  try {
+    await fbRemove("games/" + gid);
+    // Remove from local allData immediately
+    allData.games = (allData.games || []).filter(g => g.id !== gid);
+    localStorage.setItem("thefelt_data", JSON.stringify(allData));
+    closeDetailModal();
+    showToast("Game deleted");
+    renderHistory();
+  } catch(e) {
+    console.warn("Firebase delete failed:", e);
+    showToast("Delete failed — check Firebase rules");
+  }
 }
 
 // ── PROFILE ────────────────────────────────────
@@ -1066,17 +1071,22 @@ function renderAdmin() {
 
 async function removePlayer(uid) {
   if (!isAdmin()) return;
-  await loadData();
   const u = allData.users[uid];
   if (!u) return;
   const gamesPlayed = (allData.games || []).filter(g => g.entries.find(e => e.userId === uid)).length;
   const msg = `Remove ${u.username} (${u.email}) from the club?\n\nThey have played in ${gamesPlayed} game${gamesPlayed !== 1 ? "s" : ""}. Their game history will be preserved in records but their account will be deleted.\n\nThis cannot be undone.`;
   if (!confirm(msg)) return;
-  delete allData.users[uid];
-  saveData();
-  try { await fbRemove("users/" + uid); } catch(e) {}
-  showToast(`${u.username} removed`);
-  renderAdmin();
+  try {
+    await fbRemove("users/" + uid);
+    // Remove from local allData immediately
+    delete allData.users[uid];
+    localStorage.setItem("thefelt_data", JSON.stringify(allData));
+    showToast(`${u.username} removed`);
+    renderAdmin();
+  } catch(e) {
+    console.warn("Firebase delete failed:", e);
+    showToast("Delete failed — check Firebase rules");
+  }
 }
 
 function addQuote() {
